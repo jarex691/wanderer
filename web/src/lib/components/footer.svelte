@@ -27,7 +27,7 @@
         </ul>
     </div>
     <div>
-        <h5 class="font-semibold">wanderer</h5>
+        <h5 class="font-semibold">Oparte na wanderer</h5>
         <ul class="mt-4 text-sm">
             <li>
                 <a href="https://wanderer.to">{$_("about")}</a>
