@@ -38,7 +38,7 @@
 <svelte:window on:scroll={onListScroll} />
 
 <svelte:head>
-    <title>{$_("profile")} | wanderer</title>
+    <title>{$_("profile")} | trasy VisitGlacensis.pl</title>
 </svelte:head>
 
 <div class="mx-8 space-y-6">

@@ -54,7 +54,7 @@
     >
         <div></div>
         <p>
-            You are accessing wanderer from <span class="font-mono bg-gray-100"
+            You are accessing trasy VisitGlacensis.pl from <span class="font-mono bg-gray-100"
                 >{location.origin}</span
             >
             but your ORIGIN environment variable is set to

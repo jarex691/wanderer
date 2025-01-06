@@ -6,7 +6,7 @@
 </script>
 
 <svelte:head>
-    <title>{$page.status} | wanderer</title>
+    <title>{$page.status} | trasy VisitGlacensis.pl</title>
 </svelte:head>
 <div
     class="m-auto text-center max-w-md"

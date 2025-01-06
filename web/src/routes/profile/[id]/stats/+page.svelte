@@ -222,7 +222,7 @@
 </script>
 
 <svelte:head>
-    <title>{$_("profile")} | wanderer</title>
+    <title>{$_("profile")} | trasy VisitGlacensis.pl</title>
 </svelte:head>
 
 <div class="grid grid-cols-1 sm:grid-cols-[272px_minmax(0,_1fr)] lg:grid-cols-[320px_minmax(0,_1fr)] gap-y-4 max-w-6xl mx-auto">

@@ -144,7 +144,7 @@
             }
 
             const blob = await zip.generateAsync({ type: "blob" });
-            saveAs(blob, `wanderer-export-${Date.now()}.zip`);
+            saveAs(blob, `trasy-export-${Date.now()}.zip`);
         } catch (e) {
             console.error(e);
             show_toast({
@@ -157,7 +157,7 @@
 </script>
 
 <svelte:head>
-    <title>{$_("settings")} | wanderer</title>
+    <title>{$_("settings")} | trasy VisitGlacensis.pl</title>
 </svelte:head>
 <div class="space-y-6">
     <h3 class="text-2xl font-semibold">{$_("import")}</h3>

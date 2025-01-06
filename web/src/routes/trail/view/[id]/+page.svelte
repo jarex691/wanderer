@@ -14,6 +14,6 @@
 ></TrailInfoPanel>
 
 <svelte:head>
-    <title>{$trail.name} | {$_("trail", { values: { n: 1 } })} | wanderer</title
+    <title>{$trail.name} | {$_("trail", { values: { n: 1 } })} | trasy VisitGlacensis.pl</title
     >
 </svelte:head>

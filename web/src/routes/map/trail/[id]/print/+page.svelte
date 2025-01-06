@@ -455,7 +455,7 @@
 </script>
 
 <svelte:head>
-    <title>{$_("print")} | wanderer</title>
+    <title>{$_("print")} | trasy VisitGlacensis.pl</title>
 </svelte:head>
 
 <main

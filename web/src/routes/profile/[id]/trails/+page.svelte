@@ -25,7 +25,7 @@
     }
 </script>
 <svelte:head>
-    <title>{$_("profile")} | wanderer</title>
+    <title>{$_("profile")} | trasy VisitGlacensis.pl</title>
 </svelte:head>
 <TrailList
     {pagination}

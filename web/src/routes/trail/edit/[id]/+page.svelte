@@ -633,7 +633,7 @@
 <svelte:head>
     <title
         >{$formData.id ? `${$formData.name} | ${$_("edit")}` : $_("new-trail")} |
-        wanderer</title
+        trasy VisitGlacensis.pl</title
     >
 </svelte:head>
 
