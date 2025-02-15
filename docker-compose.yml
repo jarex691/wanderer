@@ -50,7 +50,7 @@ services:
         condition: service_started
     environment:
       <<: *cenv
-      ORIGIN: http://localhost:3000
+      ORIGIN: https://trasy.visitglacensis.pl
       BODY_SIZE_LIMIT: Infinity
       PUBLIC_POCKETBASE_URL: http://db:8090
       PUBLIC_DISABLE_SIGNUP: false
