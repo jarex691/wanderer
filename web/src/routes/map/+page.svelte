@@ -11,10 +11,11 @@
     import TrailCard from "$lib/components/trail/trail_card.svelte";
     import TrailFilterPanel from "$lib/components/trail/trail_filter_panel.svelte";
     import type { Settings } from "$lib/models/settings";
-    import type {
-        Trail,
-        TrailBoundingBox,
-        TrailFilter,
+    import {
+    defaultTrailSearchAttributes,
+        type Trail,
+        type TrailBoundingBox,
+        type TrailFilter,
     } from "$lib/models/trail";
     import { categories } from "$lib/stores/category_store";
     import {
@@ -25,6 +26,7 @@
     } from "$lib/stores/search_store";
     import { trails_search_bounding_box } from "$lib/stores/trail_store";
     import { getIconForLocation } from "$lib/util/icon_util";
+    import type { Snapshot } from "@sveltejs/kit";
     import * as M from "maplibre-gl";
     import { onMount } from "svelte";
     import { _ } from "svelte-i18n";
@@ -53,11 +55,20 @@
         totalPages: 1,
     };
 
+    export const snapshot: Snapshot<TrailFilter> = {
+        capture: () => filter,
+        restore: (value) => {            
+            filter = value;
+            handleFilterUpdate();
+        },
+    };
+
     async function search(q: string) {
         const r = await searchMulti({
             queries: [
                 {
                     indexUid: "trails",
+                    attributesToRetrieve: defaultTrailSearchAttributes,
                     q: q,
                     limit: 3,
                 },
@@ -136,7 +147,7 @@
         mapWithElevation?.togglePopup(trail.id!, true);
     }
 
-    async function handleFilterUpdate(filter: TrailFilter) {
+    async function handleFilterUpdate() {
         if (!map) {
             return;
         }
@@ -199,7 +210,14 @@
             const lon = page.url.searchParams.get("lon");
             map?.setZoom(14);
             map?.setCenter([parseFloat(lon!), parseFloat(lat!)]);
-        } else if (settings && settings.mapFocus == "trails") {
+        } else if (
+            settings &&
+            settings.mapFocus == "trails" &&
+            (maxBoundingBox.min_lon != 0 ||
+                maxBoundingBox.max_lat != 0 ||
+                maxBoundingBox.max_lon != 0 ||
+                maxBoundingBox.min_lat != 0)
+        ) {
             const boundingBox: M.LngLatBoundsLike = [
                 [maxBoundingBox.min_lon, maxBoundingBox.max_lat],
                 [maxBoundingBox.max_lon, maxBoundingBox.min_lat],

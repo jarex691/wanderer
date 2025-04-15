@@ -12,9 +12,7 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase"
-	"github.com/pocketbase/pocketbase/forms"
-	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/filesystem"
 	"github.com/pocketbase/pocketbase/tools/security"
 	"github.com/twpayne/go-gpx"
@@ -25,8 +23,8 @@ type StravaApi struct {
 	AceessToken string
 }
 
-func SyncStrava(app *pocketbase.PocketBase) error {
-	integrations, err := app.Dao().FindRecordsByExpr("integrations", dbx.NewExp("true"))
+func SyncStrava(app core.App) error {
+	integrations, err := app.FindAllRecords("integrations", dbx.NewExp("true"))
 	if err != nil {
 		return err
 	}
@@ -54,10 +52,15 @@ func SyncStrava(app *pocketbase.PocketBase) error {
 			return err
 		}
 
+		decryptedRefreshToken, err := security.Decrypt(stravaIntegration.RefreshToken, encryptionKey)
+		if err != nil {
+			return err
+		}
+
 		request := RefreshTokenRequest{
 			ClientID:     stravaIntegration.ClientID,
 			ClientSecret: string(decryptedSecret),
-			RefreshToken: stravaIntegration.RefreshToken,
+			RefreshToken: string(decryptedRefreshToken),
 			GrantType:    "refresh_token",
 		}
 		r, err := GetStravaToken(request)
@@ -82,7 +85,7 @@ func SyncStrava(app *pocketbase.PocketBase) error {
 			return err
 		}
 		i.Set("strava", string(b))
-		err = app.Dao().SaveRecord(i)
+		err = app.Save(i)
 		if err != nil {
 			return err
 		}
@@ -93,20 +96,20 @@ func SyncStrava(app *pocketbase.PocketBase) error {
 			for hasNewRoutes {
 
 				routes, err := fetchStravaRoutes(r.AccessToken, page)
+				page += 1
 				if err != nil {
 					warning := fmt.Sprintf("error fetching routes from strava: %v\n", err)
 					fmt.Print(warning)
 					app.Logger().Warn(warning)
-					break
+					continue
 				}
 				hasNewRoutes, err = syncTrailsWithRoutes(app, r.AccessToken, userId, routes)
 				if err != nil {
 					warning := fmt.Sprintf("error syncing strava routes with trails: %v\n", err)
 					fmt.Print(warning)
 					app.Logger().Warn(warning)
-					break
+					continue
 				}
-				page += 1
 			}
 		}
 		if stravaIntegration.Activities {
@@ -114,20 +117,20 @@ func SyncStrava(app *pocketbase.PocketBase) error {
 			hasNewActivities := true
 			for hasNewActivities {
 				activities, err := fetchStravaActivities(r.AccessToken, page)
+				page += 1
 				if err != nil {
 					warning := fmt.Sprintf("error fetching activities from strava: %v", err)
 					fmt.Print(warning)
 					app.Logger().Warn(warning)
-					break
+					continue
 				}
 				hasNewActivities, err = syncTrailsWithActivities(app, r.AccessToken, userId, activities)
 				if err != nil {
 					warning := fmt.Sprintf("error syncing strava activities with trails: %v", err)
 					fmt.Print(warning)
 					app.Logger().Warn(warning)
-					break
+					continue
 				}
-				page += 1
 			}
 		}
 	}
@@ -223,10 +226,10 @@ func fetchStravaActivities(accessToken string, page int) ([]StravaActivity, erro
 	return activities, nil
 }
 
-func syncTrailsWithRoutes(app *pocketbase.PocketBase, accessToken string, user string, routes []StravaRoute) (bool, error) {
+func syncTrailsWithRoutes(app core.App, accessToken string, user string, routes []StravaRoute) (bool, error) {
 	hasNewRoutes := false
 	for _, route := range routes {
-		trails, err := app.Dao().FindRecordsByFilter("trails", "external_id = {:id}", "", 1, 0, dbx.Params{"id": route.IDStr})
+		trails, err := app.FindRecordsByFilter("trails", "external_id = {:id}", "", 1, 0, dbx.Params{"id": route.IDStr})
 		if err != nil {
 			return hasNewRoutes, err
 		}
@@ -236,15 +239,18 @@ func syncTrailsWithRoutes(app *pocketbase.PocketBase, accessToken string, user s
 		hasNewRoutes = true
 		gpx, err := fetchRouteGPX(route, accessToken)
 		if err != nil {
-			return hasNewRoutes, err
+			app.Logger().Warn(fmt.Sprintf("Unable to fetch GPX for route '%s': %v", route.Name, err))
+			continue
 		}
 		wpIds, err := createWaypointsFromRoute(app, route, user)
 		if err != nil {
-			return hasNewRoutes, err
+			app.Logger().Warn(fmt.Sprintf("Unable to create waypoints for route '%s': %v", route.Name, err))
+			continue
 		}
 		err = createTrailFromRoute(app, route, gpx, user, wpIds)
 		if err != nil {
-			return hasNewRoutes, err
+			app.Logger().Warn(fmt.Sprintf("Unable to create trail for route '%s': %v", route.Name, err))
+			continue
 		}
 
 	}
@@ -290,15 +296,13 @@ func fetchRouteGPX(route StravaRoute, accessToken string) (*filesystem.File, err
 	return gpxFile, nil
 }
 
-func createTrailFromRoute(app *pocketbase.PocketBase, route StravaRoute, gpx *filesystem.File, user string, wpIds []string) error {
-	collection, err := app.Dao().FindCollectionByNameOrId("trails")
+func createTrailFromRoute(app core.App, route StravaRoute, gpx *filesystem.File, user string, wpIds []string) error {
+	collection, err := app.FindCollectionByNameOrId("trails")
 	if err != nil {
 		return err
 	}
 
-	record := models.NewRecord(collection)
-
-	form := forms.NewRecordUpsert(app, record)
+	record := core.NewRecord(collection)
 
 	buf := []byte(route.Map.SummaryPolyline)
 	coords, _, _ := polyline.DecodeCoords(buf)
@@ -312,8 +316,8 @@ func createTrailFromRoute(app *pocketbase.PocketBase, route StravaRoute, gpx *fi
 		lat, lon = 0, 0
 	}
 
-	bikeCategory, _ := app.Dao().FindFirstRecordByData("categories", "name", "Biking")
-	hikeCategory, _ := app.Dao().FindFirstRecordByData("categories", "name", "Walking")
+	bikeCategory, _ := app.FindFirstRecordByData("categories", "name", "Biking")
+	hikeCategory, _ := app.FindFirstRecordByData("categories", "name", "Walking")
 
 	category := ""
 
@@ -323,7 +327,7 @@ func createTrailFromRoute(app *pocketbase.PocketBase, route StravaRoute, gpx *fi
 		category = hikeCategory.Id
 	}
 
-	form.LoadData(map[string]any{
+	record.Load(map[string]any{
 		"name":              route.Name,
 		"description":       route.Description,
 		"public":            !route.Private,
@@ -341,17 +345,19 @@ func createTrailFromRoute(app *pocketbase.PocketBase, route StravaRoute, gpx *fi
 		"author":            user,
 	})
 
-	form.AddFiles("gpx", gpx)
+	if gpx != nil {
+		record.Set("gpx", gpx)
+	}
 
-	if err := form.Submit(); err != nil {
+	if err := app.Save(record); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func createWaypointsFromRoute(app *pocketbase.PocketBase, route StravaRoute, user string) ([]string, error) {
-	collection, err := app.Dao().FindCollectionByNameOrId("waypoints")
+func createWaypointsFromRoute(app core.App, route StravaRoute, user string) ([]string, error) {
+	collection, err := app.FindCollectionByNameOrId("waypoints")
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +365,7 @@ func createWaypointsFromRoute(app *pocketbase.PocketBase, route StravaRoute, use
 	wpIds := make([]string, len(route.Waypoints))
 
 	for i, wp := range route.Waypoints {
-		record := models.NewRecord(collection)
+		record := core.NewRecord(collection)
 
 		record.Set("name", strconv.Itoa(i))
 		record.Set("description", wp.Description)
@@ -369,7 +375,7 @@ func createWaypointsFromRoute(app *pocketbase.PocketBase, route StravaRoute, use
 		record.Set("author", user)
 		record.Set("distance_from_start", wp.DistanceIntoRoute)
 
-		app.Dao().SaveRecord(record)
+		app.Save(record)
 
 		wpIds[i] = record.Id
 	}
@@ -377,10 +383,10 @@ func createWaypointsFromRoute(app *pocketbase.PocketBase, route StravaRoute, use
 	return wpIds, nil
 }
 
-func syncTrailsWithActivities(app *pocketbase.PocketBase, accessToken string, user string, activities []StravaActivity) (bool, error) {
+func syncTrailsWithActivities(app core.App, accessToken string, user string, activities []StravaActivity) (bool, error) {
 	hasNewActivites := false
 	for _, activity := range activities {
-		trails, err := app.Dao().FindRecordsByFilter("trails", "external_id = {:id}", "", 1, 0, dbx.Params{"id": strconv.Itoa(int(activity.ID))})
+		trails, err := app.FindRecordsByFilter("trails", "external_id = {:id}", "", 1, 0, dbx.Params{"id": strconv.Itoa(int(activity.ID))})
 		if err != nil {
 			return hasNewActivites, err
 		}
@@ -390,15 +396,18 @@ func syncTrailsWithActivities(app *pocketbase.PocketBase, accessToken string, us
 		hasNewActivites = true
 		detailedActivity, err := fetchDetailedActivity(activity, accessToken)
 		if err != nil {
-			return hasNewActivites, err
+			app.Logger().Warn(fmt.Sprintf("Unable to fetch detailed activity '%s': %v", activity.Name, err))
+			continue
 		}
 		gpx, err := generateActivityGPX(detailedActivity, accessToken)
 		if err != nil {
-			return hasNewActivites, err
+			app.Logger().Warn(fmt.Sprintf("Unable to fetch GPX for activity '%s': %v", activity.Name, err))
+			continue
 		}
 		err = createTrailFromActivity(app, detailedActivity, gpx, user)
 		if err != nil {
-			return hasNewActivites, err
+			app.Logger().Warn(fmt.Sprintf("Unable to create trail from activity '%s': %v", activity.Name, err))
+			continue
 		}
 
 	}
@@ -433,8 +442,12 @@ func fetchDetailedActivity(activity StravaActivity, accessToken string) (*Detail
 	return &detailedActivity, nil
 }
 
-func createTrailFromActivity(app *pocketbase.PocketBase, activity *DetailedStravaActivity, gpx *filesystem.File, user string) error {
-	collection, err := app.Dao().FindCollectionByNameOrId("trails")
+func createTrailFromActivity(app core.App, activity *DetailedStravaActivity, gpx *filesystem.File, user string) error {
+	if len(activity.StartLatlng) < 2 {
+		return nil
+	}
+
+	collection, err := app.FindCollectionByNameOrId("trails")
 	if err != nil {
 		return err
 	}
@@ -447,9 +460,7 @@ func createTrailFromActivity(app *pocketbase.PocketBase, activity *DetailedStrav
 		}
 	}
 
-	record := models.NewRecord(collection)
-
-	form := forms.NewRecordUpsert(app, record)
+	record := core.NewRecord(collection)
 
 	activityMap := map[string]string{
 		"AlpineSki":       "Skiing",
@@ -491,13 +502,13 @@ func createTrailFromActivity(app *pocketbase.PocketBase, activity *DetailedStrav
 		"Yoga":            "Workout",
 	}
 
-	category, _ := app.Dao().FindFirstRecordByData("categories", "name", activityMap[activity.Type])
+	category, _ := app.FindFirstRecordByData("categories", "name", activityMap[activity.Type])
 	categoryId := ""
 	if category != nil {
 		categoryId = category.Id
 	}
 
-	form.LoadData(map[string]any{
+	record.Load(map[string]any{
 		"name":              activity.Name,
 		"description":       activity.Description,
 		"public":            !activity.Private,
@@ -515,11 +526,14 @@ func createTrailFromActivity(app *pocketbase.PocketBase, activity *DetailedStrav
 	})
 
 	if photo != nil {
-		form.AddFiles("photos", photo)
+		record.Set("photos", photo)
 	}
-	form.AddFiles("gpx", gpx)
 
-	if err := form.Submit(); err != nil {
+	if gpx != nil {
+		record.Set("gpx", gpx)
+	}
+
+	if err := app.Save(record); err != nil {
 		return err
 	}
 

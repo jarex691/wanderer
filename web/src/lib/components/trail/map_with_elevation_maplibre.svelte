@@ -12,6 +12,7 @@
         createPopupFromTrail,
         FontawesomeMarker,
     } from "$lib/util/maplibre_util";
+    import { polylineToGeoJSON } from "$lib/util/polyline_util";
     import type { ElevationProfileControl } from "$lib/vendor/maplibre-elevation-profile/elevationprofile-control";
     import { FullscreenControl } from "$lib/vendor/maplibre-fullscreen/fullscreen-control";
     import MaplibreGraticule from "$lib/vendor/maplibre-graticule/maplibre-graticule";
@@ -109,6 +110,8 @@
 
     let hoveringTrail: boolean = false;
 
+    let loadedAfterStyleSwitch = false;
+
     const trailColors = [
         "#3549BB",
         "#592E9E",
@@ -167,12 +170,11 @@
         }
     });
     $effect(() => {
-        if (waypoints) {
-            untrack(() => {
-                showWaypoints();
-                refreshElevationProfile();
-            });
-        }
+        waypoints;
+        untrack(() => {
+            showWaypoints();
+            refreshElevationProfile();
+        });
     });
 
     function getData(trails: Trail[]) {
@@ -182,7 +184,9 @@
 
         const r: GeoJSON[] = [];
         trails.forEach((t) => {
-            if (t.expand?.gpx_data) {
+            if (t.polyline) {
+                r.push(polylineToGeoJSON(t.polyline, 5));
+            } else if (t.expand?.gpx_data) {
                 r.push(toGeoJson(t.expand.gpx_data) as GeoJSON);
             } else if (t.lat !== null && t.lon !== null) {
                 r.push({
@@ -196,6 +200,7 @@
                 } as GeoJSON);
             }
         });
+
         return r;
     }
 
@@ -280,7 +285,7 @@
                 right: 16,
                 bottom:
                     16 +
-                    (epc?.isProfileShown
+                    (epc?.isProfileShown && !elevationProfileContainer
                         ? map!.getContainer().clientHeight * 0.3
                         : 0),
             },
@@ -663,6 +668,13 @@
                 markers.push(marker);
             }
         }
+        markers = markers.filter((marker) => {
+            if (!waypoints.find((w) => w.id == marker._element.id)) {
+                marker.remove();
+                return false;
+            }
+            return true;
+        });
     }
 
     function hideWaypoints() {
@@ -789,6 +801,7 @@
                 layers = {};
                 map?.setStyle(style.value);
                 localStorage.setItem("layer", style.text);
+                loadedAfterStyleSwitch = true;
             },
             selectedIndex:
                 preferredMapStyleIndex !== -1 ? preferredMapStyleIndex : 0,
@@ -895,6 +908,18 @@
                             type: "hillshade",
                         });
                     }
+
+                    if (loadedAfterStyleSwitch) {
+                        trails.forEach((t, i) => {
+                            const layerId = t.id!;
+                            addTrailLayer(t, layerId, i, data[i]);
+                        });
+                        if (activeTrail !== null) {
+                            addCaretLayer(trails[activeTrail].id!);
+                        }
+
+                        loadedAfterStyleSwitch = false;
+                    }
                 } catch (e) {}
             }
         });
@@ -934,8 +959,31 @@
     onDestroy(() => {
         map?.remove();
     });
+
+    function handleKeydown(e: KeyboardEvent) {
+        if (e.key == "m") {
+            if (trails.length === 1) {
+                removeCaretLayer();
+                removeTrailLayer(trails[0].id!);
+            }
+        }
+    }
+
+    function handleKeyup(e: KeyboardEvent) {
+        if (e.key == "m") {
+            if (trails.length === 1) {
+                addTrailLayer(trails[0], trails[0].id!, 0, data[0]);
+                addCaretLayer(trails[0].id);
+            }
+        } else if (e.key == "p") {
+            if (showElevation) {
+                epc?.toggleProfile();
+            }
+        }
+    }
 </script>
 
+<svelte:window on:keydown={handleKeydown} on:keyup={handleKeyup} />
 <div id="map" bind:this={mapContainer}></div>
 
 <style>

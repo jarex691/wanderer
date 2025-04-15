@@ -14,16 +14,14 @@ import (
 	"time"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase"
-	"github.com/pocketbase/pocketbase/forms"
-	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/filesystem"
 	"github.com/pocketbase/pocketbase/tools/security"
 	"github.com/twpayne/go-gpx"
 )
 
-func SyncKomoot(app *pocketbase.PocketBase) error {
-	integrations, err := app.Dao().FindRecordsByExpr("integrations", dbx.NewExp("true"))
+func SyncKomoot(app core.App) error {
+	integrations, err := app.FindAllRecords("integrations", dbx.NewExp("true"))
 	if err != nil {
 		return err
 	}
@@ -49,7 +47,10 @@ func SyncKomoot(app *pocketbase.PocketBase) error {
 
 		decryptedPassword, err := security.Decrypt(komootIntegration.Password, encryptionKey)
 		if err != nil {
-			return err
+			warning := fmt.Sprintf("unable to decrypt password: %v\n", err)
+			fmt.Print(warning)
+			app.Logger().Warn(warning)
+			continue
 		}
 
 		err = k.Login(komootIntegration.Email, string(decryptedPassword))
@@ -67,7 +68,7 @@ func SyncKomoot(app *pocketbase.PocketBase) error {
 				warning := fmt.Sprintf("error fetching tours from komoot: %v\n", err)
 				fmt.Print(warning)
 				app.Logger().Warn(warning)
-				break
+				continue
 			}
 
 			hasNewTours, err = syncTrailWithTours(app, k, komootIntegration, userId, tours)
@@ -75,7 +76,7 @@ func SyncKomoot(app *pocketbase.PocketBase) error {
 				warning := fmt.Sprintf("error syncing komoot tours with trails: %v\n", err)
 				fmt.Print(warning)
 				app.Logger().Warn(warning)
-				break
+				continue
 			}
 			page += 1
 		}
@@ -164,7 +165,7 @@ func (k *KomootApi) fetchTours(page int) ([]KomootTour, error) {
 }
 
 func (k *KomootApi) fetchDetailedTour(tour KomootTour) (*DetailedKomootTour, error) {
-	url := fmt.Sprintf("https://api.komoot.de/v007/tours/%d?_embedded=coordinates,way_types,surfaces,directions,participants,timeline&directions=v2&fields=timeline&format=coordinate_array&timeline_highlights_fields=tips,recommenders", tour.ID)
+	url := fmt.Sprintf("https://api.komoot.de/v007/tours/%d?_embedded=coordinates,way_types,surfaces,directions,participants,timeline,cover_images&directions=v2&fields=timeline&format=coordinate_array&timeline_highlights_fields=tips,recommenders", tour.ID)
 	body, err := sendRequest(url, k.buildHeader())
 	if err != nil {
 		return nil, err
@@ -175,10 +176,10 @@ func (k *KomootApi) fetchDetailedTour(tour KomootTour) (*DetailedKomootTour, err
 	return data, nil
 }
 
-func syncTrailWithTours(app *pocketbase.PocketBase, k *KomootApi, i KomootIntegration, user string, tours []KomootTour) (bool, error) {
+func syncTrailWithTours(app core.App, k *KomootApi, i KomootIntegration, user string, tours []KomootTour) (bool, error) {
 	hasNewTours := false
 	for _, tour := range tours {
-		trails, err := app.Dao().FindRecordsByFilter("trails", "external_id = {:id}", "", 1, 0, dbx.Params{"id": strconv.Itoa(int(tour.ID))})
+		trails, err := app.FindRecordsByFilter("trails", "external_id = {:id}", "", 1, 0, dbx.Params{"id": strconv.Itoa(int(tour.ID))})
 		if err != nil {
 			return hasNewTours, err
 		}
@@ -188,34 +189,56 @@ func syncTrailWithTours(app *pocketbase.PocketBase, k *KomootApi, i KomootIntegr
 		hasNewTours = true
 		detailedTour, err := k.fetchDetailedTour(tour)
 		if err != nil {
-			return hasNewTours, err
+			app.Logger().Warn(fmt.Sprintf("Unable to fetch details for tour '%s': %v", tour.Name, err))
+			continue
 		}
 		gpx, err := generateTourGPX(detailedTour)
 		if err != nil {
-			return hasNewTours, err
+			app.Logger().Warn(fmt.Sprintf("Unable to generate GPX for tour '%s': %v", tour.Name, err))
+			continue
 		}
 		wpIds, err := createWaypointsFromTour(app, detailedTour, user)
 		if err != nil {
-			return hasNewTours, err
+			app.Logger().Warn(fmt.Sprintf("Unable to create waypoints for tour '%s': %v", tour.Name, err))
+			continue
 		}
 		err = createTrailFromTour(app, detailedTour, gpx, user, wpIds)
 		if err != nil {
-			return hasNewTours, err
+			app.Logger().Warn(fmt.Sprintf("Unable to create trail for tour '%s': %v", tour.Name, err))
+			continue
 		}
 
 	}
 	return hasNewTours, nil
 }
 
-func createTrailFromTour(app *pocketbase.PocketBase, detailedTour *DetailedKomootTour, gpx *filesystem.File, user string, wpIds []string) error {
-	collection, err := app.Dao().FindCollectionByNameOrId("trails")
+func createTrailFromTour(app core.App, detailedTour *DetailedKomootTour, gpx *filesystem.File, user string, wpIds []string) error {
+	var summitLogRecord *core.Record
+	if detailedTour.Type == "tour_recorded" {
+		collection, err := app.FindCollectionByNameOrId("summit_logs")
+		if err != nil {
+			return err
+		}
+
+		summitLogRecord = core.NewRecord(collection)
+		summitLogRecord.Load(map[string]any{
+			"distance":       detailedTour.Distance,
+			"elevation_gain": detailedTour.ElevationUp,
+			"elevation_loss": detailedTour.ElevationDown,
+			"duration":       detailedTour.Duration / 60,
+			"date":           detailedTour.Date,
+			"author":         user,
+		})
+		if err := app.Save(summitLogRecord); err != nil {
+			return err
+		}
+	}
+	collection, err := app.FindCollectionByNameOrId("trails")
 	if err != nil {
 		return err
 	}
 
-	record := models.NewRecord(collection)
-
-	form := forms.NewRecordUpsert(app, record)
+	record := core.NewRecord(collection)
 
 	categoryMap := map[string]string{
 		"hike":           "Hiking",
@@ -228,15 +251,24 @@ func createTrailFromTour(app *pocketbase.PocketBase, detailedTour *DetailedKomoo
 		"mountaineering": "Hiking",
 	}
 
-	category, _ := app.Dao().FindFirstRecordByData("categories", "name", categoryMap[detailedTour.Sport])
+	category, _ := app.FindFirstRecordByData("categories", "name", categoryMap[detailedTour.Sport])
 	categoryId := ""
 	if category != nil {
 		categoryId = category.Id
 	}
 
-	photo, err := fetchPhoto(detailedTour.MapImage.Src, "", "")
-	if err != nil {
-		return err
+	var photos []*filesystem.File
+	if len(detailedTour.Embedded.CoverImages.Embedded.Items) > 0 {
+		photos, err = fetchRoutePhotos(detailedTour)
+		if err != nil {
+			return err
+		}
+	} else {
+		photo, err := fetchPhoto(detailedTour.MapImage.Src, "", "")
+		if err != nil {
+			return err
+		}
+		photos = append(photos, photo)
 	}
 
 	diffculty := detailedTour.Difficulty.Grade
@@ -244,7 +276,7 @@ func createTrailFromTour(app *pocketbase.PocketBase, detailedTour *DetailedKomoo
 		diffculty = "easy"
 	}
 
-	form.LoadData(map[string]any{
+	record.Load(map[string]any{
 		"name":              detailedTour.Name,
 		"public":            detailedTour.Status == "public",
 		"distance":          detailedTour.Distance,
@@ -262,18 +294,25 @@ func createTrailFromTour(app *pocketbase.PocketBase, detailedTour *DetailedKomoo
 		"author":            user,
 	})
 
-	form.AddFiles("photos", photo)
-	form.AddFiles("gpx", gpx)
+	if summitLogRecord != nil {
+		record.Set("summit_logs", summitLogRecord.Id)
+	}
+	if photos != nil {
+		record.Set("photos", photos)
+	}
+	if gpx != nil {
+		record.Set("gpx", gpx)
+	}
 
-	if err := form.Submit(); err != nil {
+	if err := app.Save(record); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func createWaypointsFromTour(app *pocketbase.PocketBase, tour *DetailedKomootTour, user string) ([]string, error) {
-	collection, err := app.Dao().FindCollectionByNameOrId("waypoints")
+func createWaypointsFromTour(app core.App, tour *DetailedKomootTour, user string) ([]string, error) {
+	collection, err := app.FindCollectionByNameOrId("waypoints")
 	if err != nil {
 		return nil, err
 	}
@@ -285,8 +324,7 @@ func createWaypointsFromTour(app *pocketbase.PocketBase, tour *DetailedKomootTou
 		if err != nil {
 			return nil, err
 		}
-		record := models.NewRecord(collection)
-		form := forms.NewRecordUpsert(app, record)
+		record := core.NewRecord(collection)
 
 		wpDescription := ""
 		if len(wp.Embedded.Reference.Embedded.Tips.Embedded.Items) > 0 {
@@ -303,7 +341,7 @@ func createWaypointsFromTour(app *pocketbase.PocketBase, tour *DetailedKomootTou
 			wpLon = tour.StartPoint.Lng
 		}
 
-		form.LoadData(map[string]any{
+		record.Load(map[string]any{
 			"name":                wp.Embedded.Reference.Name,
 			"description":         wpDescription,
 			"lat":                 wpLat,
@@ -313,11 +351,11 @@ func createWaypointsFromTour(app *pocketbase.PocketBase, tour *DetailedKomootTou
 			"distance_from_start": 0,
 		})
 
-		for _, photo := range photos {
-			form.AddFiles("photos", photo)
+		if photos != nil {
+			record.Set("photos", photos)
 		}
 
-		if err := form.Submit(); err != nil {
+		if err := app.Save(record); err != nil {
 			return nil, err
 		}
 
@@ -325,6 +363,26 @@ func createWaypointsFromTour(app *pocketbase.PocketBase, tour *DetailedKomootTou
 	}
 
 	return wpIds, nil
+}
+
+func fetchRoutePhotos(tour *DetailedKomootTour) ([]*filesystem.File, error) {
+
+	photos := make([]*filesystem.File, len(tour.Embedded.CoverImages.Embedded.Items))
+
+	for i, img := range tour.Embedded.CoverImages.Embedded.Items {
+		photo, err := fetchPhoto(img.Src, "", "")
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasSuffix(photo.Name, ".gif") {
+			continue
+		}
+		photos[i] = photo
+
+		//TODO: komoot photos can have location data. Maybe we should create a waypoint for those photos?
+	}
+
+	return photos, nil
 }
 
 func fetchWaypointPhotos(wp Item) ([]*filesystem.File, error) {
@@ -335,6 +393,9 @@ func fetchWaypointPhotos(wp Item) ([]*filesystem.File, error) {
 		photo, err := fetchPhoto(img.Src, "", "")
 		if err != nil {
 			return nil, err
+		}
+		if strings.HasSuffix(photo.Name, ".gif") {
+			continue
 		}
 		photos[i] = photo
 	}

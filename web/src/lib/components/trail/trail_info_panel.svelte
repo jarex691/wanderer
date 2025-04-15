@@ -13,7 +13,7 @@
         comments_update,
     } from "$lib/stores/comment_store";
     import { currentUser } from "$lib/stores/user_store";
-    import { getFileURL } from "$lib/util/file_util";
+    import { getFileURL, isVideoURL } from "$lib/util/file_util";
     import {
         formatDistance,
         formatElevation,
@@ -42,6 +42,7 @@
     import SummitLogTable from "../summit_log/summit_log_table.svelte";
     import MapWithElevationMaplibre from "./map_with_elevation_maplibre.svelte";
     import TrailTimeline from "./trail_timeline.svelte";
+    import Chip from "../base/chip.svelte";
 
     interface Props {
         initTrail: Trail;
@@ -62,7 +63,7 @@
     const tabs = [
         $_("summit-book"),
         $_("photos"),
-        ...(pb.authStore.model ? [$_("comment", { values: { n: 2 } })] : []),
+        ...(pb.authStore.record ? [$_("comment", { values: { n: 2 } })] : []),
     ];
 
     const trailIsShared =
@@ -149,13 +150,19 @@
         comments.set(newCommentList);
         commentDeleteLoading = false;
     }
-    let thumbnail = $derived(
-        trail.photos.length
-            ? getFileURL(trail, trail.photos[trail.thumbnail ?? 0])
-            : $theme === "light"
-              ? emptyStateTrailLight
-              : emptyStateTrailDark,
-    );
+
+    function getHeaderPhotos() {
+        if (trail.photos.length) {
+            return trail.photos.slice(0, 3).map((p) => getFileURL(trail, p));
+        } else {
+            return $theme === "light"
+                ? [emptyStateTrailLight]
+                : [emptyStateTrailDark];
+        }
+    }
+
+    const headerPhotos = getHeaderPhotos();
+
     $effect(() => {
         if (browser && activeTab == 2) {
             fetchComments();
@@ -171,55 +178,96 @@
     style="max-width: min(100%, 76rem);"
 >
     <div class="trail-info-panel-header">
-        <section class="relative h-80">
-            <img
-                class="w-full h-80"
-                class:rounded-t-3xl={mode !== "list"}
-                src={thumbnail}
-                alt=""
-            />
-            <div
-                class="absolute bottom-0 w-full h-full bg-gradient-to-b from-transparent to-black opacity-60"
-            ></div>
-            {#if (trail.public || trailIsShared) && pb.authStore.model}
-                <div
-                    class="flex absolute top-6 right-6 {trail.public &&
-                    trailIsShared
-                        ? 'w-16'
-                        : 'w-8'} h-8 rounded-full items-center justify-center bg-white text-primary"
-                >
-                    {#if trail.public && pb.authStore.model}
-                        <span
-                            class:tooltip={mode != "map"}
-                            class:mr-3={trail.public && trailIsShared}
-                            data-title={$_("public")}
-                        >
-                            <i class="fa fa-globe"></i>
-                        </span>
-                    {/if}
-                    {#if trailIsShared}
-                        <ShareInfo type="trail" subject={trail}></ShareInfo>
-                    {/if}
-                </div>
-            {/if}
-            {#if mode == "map"}
+        <section class="relative">
+            {#if mode !== "list"}
                 <button
                     aria-label="Back"
-                    class="btn-icon hover:bg-white hover:text-black ring-input-ring text-white absolute top-6 left-6"
+                    class="bg-black/40 text-white text-lg rounded-full w-10 h-10 hover:bg-black/50 transition-colors focus:ring-4 focus:ring-primary/70 top-6 left-6 absolute"
                     onclick={() => history.back()}
                 >
                     <i class="fa fa-arrow-left"></i>
                 </button>
             {/if}
             <div
-                class="flex absolute justify-between items-end w-full bottom-8 left-0 px-8 gap-y-4"
+                class="grid gap-[1px] {headerPhotos.length > 1
+                    ? 'grid-cols-[8fr_5fr]'
+                    : 'grid-cols-1'} h-80 rounded-t-3xl overflow-hidden cursor-pointer"
             >
-                <div class="text-white overflow-hidden">
-                    <h4 title={trail.name} class="text-4xl font-bold line-clamp-3">
+                <PhotoGallery
+                    photos={trail.photos.map((p) => getFileURL(trail, p))}
+                    bind:this={gallery}
+                ></PhotoGallery>
+                {#each headerPhotos as photo, i}
+                    {#if isVideoURL(photo)}
+                        <!-- svelte-ignore a11y_media_has_caption -->
+                        <video
+                            class="object-cover h-full w-full"
+                            onclick={trail.photos.length
+                                ? () => gallery.openGallery(i)
+                                : null}
+                            autoplay
+                            loop
+                            src={photo}
+                        ></video>
+                    {:else}
+                        <!-- svelte-ignore a11y_click_events_have_key_events -->
+                        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                        <img
+                            class="object-cover h-full w-full"
+                            onclick={trail.photos.length
+                                ? () => gallery.openGallery(i)
+                                : null}
+                            class:row-span-2={i == 0 && headerPhotos.length > 2}
+                            src={photo}
+                            alt=""
+                        />
+                    {/if}
+                {/each}
+            </div>
+        </section>
+        <section class="border-b border-input-border p-8">
+            <div class="flex justify-between items-center gap-x-4">
+                {#if trail.expand?.tags && trail.expand.tags.length > 0}
+                    <div class="flex flex-wrap gap-2">
+                        {#each trail.expand.tags as tag}
+                            <Chip text={tag.name} primary={false}></Chip>
+                        {/each}
+                    </div>
+                {/if}
+                {#if (trail.public || trailIsShared) && pb.authStore.record}
+                    <div
+                        class="flex {trail.public && trailIsShared
+                            ? 'w-16'
+                            : 'w-8'} h-8 rounded-full items-center"
+                    >
+                        {#if trail.public && pb.authStore.record}
+                            <span
+                                class:tooltip={mode != "map"}
+                                class:mr-3={trail.public && trailIsShared}
+                                data-title={$_("public")}
+                            >
+                                <i class="fa fa-globe"></i>
+                            </span>
+                        {/if}
+                        {#if trailIsShared}
+                            <ShareInfo type="trail" subject={trail}></ShareInfo>
+                        {/if}
+                    </div>
+                {/if}
+            </div>
+            <div class="flex justify-between items-end w-full gap-y-4">
+                <div class=" overflow-hidden">
+                    <h4
+                        title={trail.name}
+                        class="{mode == 'map'
+                            ? 'text-4xl'
+                            : 'text-5xl'} font-bold line-clamp-3 mb-1"
+                        style="line-height: 1.18"
+                    >
                         {trail.name}
                     </h4>
                     {#if trail.date}
-                        <h5 class="text-sm">
+                        <h5 class="text-sm text-gray-500">
                             {new Date(trail.date).toLocaleDateString(
                                 undefined,
                                 {
@@ -232,7 +280,7 @@
                         </h5>
                     {/if}
                     {#if trail.expand?.author}
-                        <p class="my-3">
+                        <p class="mt-3 mb-3">
                             {$_("by")}
                             <img
                                 class="rounded-full w-8 aspect-square mx-1 inline"
@@ -254,7 +302,7 @@
                             {/if}
                         </p>
                     {/if}
-                    <div class="flex flex-wrap gap-x-8 gap-y-2 mt-4 mr-8">
+                    <div class="flex flex-wrap gap-x-8 gap-y-2 mt-2 mr-8">
                         {#if trail.location}
                             <h3 class="text-lg">
                                 <i class="fa fa-location-dot mr-2"></i>
@@ -328,15 +376,6 @@
                 </div>
             {/if}
         </section>
-        {#if trail.tags && trail.tags.length > 0}
-            <hr class="border-separator" />
-            <section class="flex p-8 gap-4 text-gray-600">
-                {#each trail.tags as tag}
-                    <span class="py-2 px-4 border rounded-full">{tag}</span>
-                {/each}
-            </section>
-            <hr class="border-separator" />
-        {/if}
     </div>
     <section class="trail-info-panel-content px-8">
         <div
@@ -405,21 +444,30 @@
                                 ? 'sm:grid-cols-2 md:grid-cols-3'
                                 : ''} gap-4"
                         >
-                            <PhotoGallery
-                                photos={trail.photos.map((p) =>
-                                    getFileURL(trail, p),
-                                )}
-                                bind:this={gallery}
-                            ></PhotoGallery>
                             {#each trail.photos ?? [] as photo, i}
                                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                                 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                                <img
-                                    class="rounded-xl cursor-pointer hover:scale-105 transition-transform"
-                                    onclick={() => gallery.openGallery(i)}
-                                    src={getFileURL(trail, photo)}
-                                    alt=""
-                                />
+                                {#if isVideoURL(photo)}
+                                    <!-- svelte-ignore a11y_media_has_caption -->
+                                    <video
+                                        controls={false}
+                                        loop
+                                        class="rounded-xl cursor-pointer hover:scale-105 transition-transform"
+                                        onclick={() => gallery.openGallery(i)}
+                                        onmouseenter={(e) =>
+                                            (e.target as any).play()}
+                                        onmouseleave={(e) =>
+                                            (e.target as any).pause()}
+                                        src={getFileURL(trail, photo)}
+                                    ></video>
+                                {:else}
+                                    <img
+                                        class="rounded-xl cursor-pointer hover:scale-105 transition-transform"
+                                        onclick={() => gallery.openGallery(i)}
+                                        src={getFileURL(trail, photo)}
+                                        alt=""
+                                    />
+                                {/if}
                             {/each}
                         </div>
                     {:else}

@@ -39,12 +39,20 @@
                     .string()
                     .min(1, "required")
                     .email("not-a-valid-email-address"),
-                password: z.string().min(
-                    8,
-                    $_("must-be-at-least-n-characters-long", {
-                        values: { n: 8 },
-                    }),
-                ),
+                password: z
+                    .string()
+                    .min(
+                        8,
+                        $_("must-be-at-least-n-characters-long", {
+                            values: { n: 8 },
+                        }),
+                    )
+                    .max(
+                        72,
+                        $_("must-be-at-most-n-characters-long", {
+                            values: { n: 72 },
+                        }),
+                    ),
             }),
         }),
         onSubmit: async (newUser) => {
@@ -72,10 +80,11 @@
             }
             try {
                 await invalidateAll();
-                const language = Object.values(Language).includes(
-                    window.navigator.language as Language,
-                )
-                    ? (window.navigator.language as Language)
+                const browserLang: Language = window.navigator.language
+                    .toLocaleLowerCase()
+                    .slice(0, 2) as Language;
+                const language = Object.values(Language).includes(browserLang)
+                    ? browserLang
                     : Language.en;
                 await settings_update({ id: page.data.settings.id, language });
             } catch (e) {

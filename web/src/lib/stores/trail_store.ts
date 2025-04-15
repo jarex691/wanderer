@@ -1,5 +1,5 @@
 import type { SummitLog } from "$lib/models/summit_log";
-import { Trail, type TrailFilter, type TrailFilterValues, type TrailSearchResult } from "$lib/models/trail";
+import { defaultTrailSearchAttributes, Trail, type TrailFilter, type TrailFilterValues, type TrailSearchResult } from "$lib/models/trail";
 import type { Waypoint } from "$lib/models/waypoint";
 import { pb } from "$lib/pocketbase";
 import { deepEqual } from "$lib/util/deep_util";
@@ -11,6 +11,8 @@ import { writable, type Writable } from "svelte/store";
 import { summit_logs_create, summit_logs_delete, summit_logs_update } from "./summit_log_store";
 import { waypoints_create, waypoints_delete, waypoints_update } from "./waypoint_store";
 import { APIError } from "$lib/util/api_util";
+import { tags_create } from "./tag_store";
+import type { Tag } from "$lib/models/tag";
 
 let trails: Trail[] = []
 export const trail: Writable<Trail> = writable(new Trail(""));
@@ -20,7 +22,7 @@ export const editTrail: Writable<Trail> = writable(new Trail(""));
 export async function trails_index(perPage: number = 21, random: boolean = false, f: (url: RequestInfo | URL, config?: RequestInit) => Promise<Response> = fetch) {
     const r = await f('/api/v1/trail?' + new URLSearchParams({
         "perPage": perPage.toString(),
-        expand: "category,waypoints,summit_logs",
+        expand: "category,waypoints,summit_logs,tags",
         sort: random ? "@random" : "",
     }), {
         method: 'GET',
@@ -63,6 +65,7 @@ export async function trails_search_filter(filter: TrailFilter, page: number = 1
             q: filter.q,
             options: {
                 filter: filterText,
+                attributesToRetrieve: defaultTrailSearchAttributes,
                 sort: [`${filter.sort}:${filter.sortOrder == "+" ? "asc" : "desc"}`],
                 hitsPerPage: 12,
                 page: page
@@ -87,7 +90,7 @@ export async function trails_search_filter(filter: TrailFilter, page: number = 1
 
 }
 
-export async function trails_search_bounding_box(northEast: M.LngLat, southWest: M.LngLat, filter?: TrailFilter, page: number = 1, loadGPX: boolean = true) {
+export async function trails_search_bounding_box(northEast: M.LngLat, southWest: M.LngLat, filter?: TrailFilter, page: number = 1, includePolyline: boolean = true) {
 
     let filterText: string = "";
 
@@ -104,6 +107,7 @@ export async function trails_search_bounding_box(northEast: M.LngLat, southWest:
                     `_geoBoundingBox([${northEast.lat}, ${northEast.lng}], [${southWest.lat}, ${southWest.lng}])`,
                     filterText
                 ],
+                attributesToRetrieve: [...defaultTrailSearchAttributes, ...(includePolyline ? ["polyline"] : [])],
                 hitsPerPage: 500,
                 page: page
             }
@@ -116,7 +120,7 @@ export async function trails_search_bounding_box(northEast: M.LngLat, southWest:
         return { trails: [], ...result }
     }
 
-    const resultTrails: Trail[] = await searchResultToTrailList(result.hits, loadGPX)
+    const resultTrails: Trail[] = await searchResultToTrailList(result.hits)
 
     trails = page > 1 ? trails.concat(resultTrails) : resultTrails
 
@@ -127,7 +131,7 @@ export async function trails_search_bounding_box(northEast: M.LngLat, southWest:
 
 export async function trails_show(id: string, loadGPX?: boolean, f: (url: RequestInfo | URL, config?: RequestInit) => Promise<Response> = fetch) {
     const r = await f(`/api/v1/trail/${id}?` + new URLSearchParams({
-        expand: "category,waypoints,summit_logs,trail_share_via_trail",
+        expand: "category,waypoints,summit_logs,trail_share_via_trail,tags",
     }), {
         method: 'GET',
     })
@@ -181,12 +185,22 @@ export async function trails_create(trail: Trail, photos: File[], gpx: File | Bl
         const model = await summit_logs_create(summitLog, f);
         trail.summit_logs.push(model.id!);
     }
+    for (const tag of trail.expand?.tags ?? []) {
+        if (!tag.id) {
+            const model = await tags_create(tag)
+            trail.tags.push(model.id!)
+        } else {
+            trail.tags.push(tag.id)
+        }
+    }
 
-    trail.author = pb.authStore.model!.id
+    trail.author = pb.authStore.record!.id
 
-    let r = await f('/api/v1/trail', {
+    let r = await f(`/api/v1/trail?` + new URLSearchParams({
+        expand: "category,waypoints,summit_logs,trail_share_via_trail,tags",
+    }), {
         method: 'PUT',
-        body: JSON.stringify({ ...trail, expand: undefined }),
+        body: JSON.stringify({ ...trail }),
     })
 
     if (!r.ok) {
@@ -216,7 +230,9 @@ export async function trails_create(trail: Trail, photos: File[], gpx: File | Bl
         throw new APIError(r.status, response.message, response.detail)
     }
 
-    return await r.json();
+    model = await r.json();
+
+    return model;
 
 }
 
@@ -261,8 +277,23 @@ export async function trails_update(oldTrail: Trail, newTrail: Trail, photos?: F
         const success = await summit_logs_delete(deletedSummitLog);
     }
 
+    const tagUpdates = compareObjectArrays<Tag>(oldTrail.expand?.tags ?? [], newTrail.expand?.tags ?? []);
+
+    for (const tag of tagUpdates.added) {
+        if (!tag.id) {
+            const model = await tags_create(tag)
+            newTrail.tags.push(model.id!)
+        } else {
+            newTrail.tags.push(tag.id)
+        }
+    }
+
+    for (const tag of tagUpdates.deleted) {
+        newTrail.tags = newTrail.tags.filter(t => t != tag.id);
+    }
+
     let r = await fetch(`/api/v1/trail/${newTrail.id}?` + new URLSearchParams({
-        expand: "category,waypoints,summit_logs,trail_share_via_trail",
+        expand: "category,waypoints,summit_logs,trail_share_via_trail,tags",
     }), {
         method: 'POST',
         body: JSON.stringify({ ...newTrail, expand: undefined }),
@@ -415,7 +446,7 @@ export async function fetchGPX(trail: { gpx?: string } & Record<string, any>, f:
     return gpxData
 }
 
-async function searchResultToTrailList(hits: Hits<TrailSearchResult>, loadGPX: boolean = false): Promise<Trail[]> {
+async function searchResultToTrailList(hits: Hits<TrailSearchResult>): Promise<Trail[]> {
     const trails: Trail[] = []
     for (const h of hits) {
         const t: Trail & RecordModel = {
@@ -428,6 +459,7 @@ async function searchResultToTrailList(hits: Hits<TrailSearchResult>, loadGPX: b
             public: h.public,
             summit_logs: [],
             waypoints: [],
+            tags: h.tags ?? [],
             category: h.category,
             created: new Date(h.created * 1000).toISOString(),
             date: new Date(h.date * 1000).toISOString(),
@@ -442,6 +474,7 @@ async function searchResultToTrailList(hits: Hits<TrailSearchResult>, loadGPX: b
             lon: h._geo.lng,
             location: h.location,
             gpx: h.gpx,
+            polyline: h.polyline,
             thumbnail: 0,
             expand: {
                 author: {
@@ -459,10 +492,6 @@ async function searchResultToTrailList(hits: Hits<TrailSearchResult>, loadGPX: b
             }
         }
 
-        if (loadGPX) {
-            const gpxData: string = await fetchGPX(t);
-            t.expand!.gpx_data = gpxData;
-        }
 
         trails.push(t)
     }
@@ -499,17 +528,17 @@ function buildFilterText(filter: TrailFilter, includeGeo: boolean): string {
         if (filter.public !== undefined) {
             filterText += `(public = ${filter.public}`
 
-            if (!filter.author?.length || filter.author == pb.authStore.model?.id) {
-                filterText += ` OR author = ${pb.authStore.model?.id}`
+            if (!filter.author?.length || filter.author == pb.authStore.record?.id) {
+                filterText += ` OR author = ${pb.authStore.record?.id}`
             }
             filterText += ")"
         }
 
         if (filter.shared !== undefined) {
             if (filter.shared === true) {
-                filterText += ` OR shares = ${pb.authStore.model?.id}`
+                filterText += ` OR shares = ${pb.authStore.record?.id}`
             } else {
-                filterText += ` AND NOT shares = ${pb.authStore.model?.id}`
+                filterText += ` AND NOT shares = ${pb.authStore.record?.id}`
 
             }
         }
@@ -527,6 +556,11 @@ function buildFilterText(filter: TrailFilter, includeGeo: boolean): string {
     if (filter.category.length > 0) {
         filterText += ` AND category IN [${filter.category.join(",")}]`;
     }
+
+    if (filter.tags.length > 0) {
+        filterText += ` AND (${filter.tags.map(t => `tags = '${t}'`).join(" OR ")})`;
+    }
+
     if (filter.completed !== undefined) {
         filterText += ` AND completed = ${filter.completed}`;
     }

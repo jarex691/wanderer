@@ -1,18 +1,39 @@
 package util
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 
 	"github.com/meilisearch/meilisearch-go"
-	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/twpayne/go-gpx"
+	"github.com/twpayne/go-polyline"
 )
 
-func documentFromTrailRecord(r *models.Record, author *models.Record, includeShares bool) map[string]interface{} {
+func documentFromTrailRecord(app core.App, r *core.Record, author *core.Record, includeShares bool) map[string]interface{} {
 	photos := r.GetStringSlice("photos")
 	thumbnail := ""
 	if len(photos) > 0 {
-		thumbnail = r.GetStringSlice("photos")[r.GetInt("thumbnail")]
+		thumbnailIndex := r.GetInt("thumbnail")
+		if thumbnailIndex >= len(photos) {
+			thumbnailIndex = 0
+		}
+		thumbnail = photos[thumbnailIndex]
+	}
+
+	tagRecords := r.ExpandedAll("tags")
+	tags := make([]string, len(tagRecords))
+
+	for i, v := range tagRecords {
+		tags[i] = v.GetString("name")
+	}
+
+	polyline, err := getPolyline(app, r)
+	if err != nil {
+		return nil
 	}
 
 	document := map[string]interface{}{
@@ -35,6 +56,8 @@ func documentFromTrailRecord(r *models.Record, author *models.Record, includeSha
 		"public":         r.GetBool("public"),
 		"thumbnail":      thumbnail,
 		"gpx":            r.GetString("gpx"),
+		"tags":           tags,
+		"polyline":       polyline,
 		"_geo": map[string]float64{
 			"lat": r.GetFloat("lat"),
 			"lng": r.GetFloat("lon"),
@@ -48,7 +71,45 @@ func documentFromTrailRecord(r *models.Record, author *models.Record, includeSha
 	return document
 }
 
-func documentFromListRecord(r *models.Record, includeShares bool) map[string]interface{} {
+func getPolyline(app core.App, r *core.Record) (string, error) {
+	gpxPath := r.GetString("gpx")
+	if len(gpxPath) == 0 {
+		return "", nil
+	}
+	avatarKey := r.BaseFilesPath() + "/" + gpxPath
+	fsys, err := app.NewFilesystem()
+	if err != nil {
+		return "", err
+	}
+	defer fsys.Close()
+
+	gpxFile, err := fsys.GetFile(avatarKey)
+	if err != nil {
+		return "", err
+	}
+	defer gpxFile.Close()
+
+	content := new(bytes.Buffer)
+	_, err = io.Copy(content, gpxFile)
+	if err != nil {
+		return "", err
+	}
+	gpxData, err := gpx.Read(content)
+	if err != nil {
+		return "", err
+	}
+	coordinates := make([][]float64, 4)
+	for _, trk := range gpxData.Trk {
+		for _, seg := range trk.TrkSeg {
+			for _, pt := range seg.TrkPt {
+				coordinates = append(coordinates, []float64{pt.Lat, pt.Lon})
+			}
+		}
+	}
+	return string(polyline.EncodeCoords(coordinates)), nil
+}
+
+func documentFromListRecord(r *core.Record, includeShares bool) map[string]interface{} {
 	document := map[string]interface{}{
 		"id":          r.Id,
 		"author":      r.GetString("author"),
@@ -66,8 +127,13 @@ func documentFromListRecord(r *models.Record, includeShares bool) map[string]int
 	return document
 }
 
-func IndexTrail(r *models.Record, author *models.Record, client meilisearch.ServiceManager) error {
-	documents := []map[string]interface{}{documentFromTrailRecord(r, author, true)}
+func IndexTrail(app core.App, r *core.Record, author *core.Record, client meilisearch.ServiceManager) error {
+	errs := app.ExpandRecord(r, []string{"tags"}, nil)
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to expand: %v", errs)
+	}
+
+	documents := []map[string]interface{}{documentFromTrailRecord(app, r, author, true)}
 
 	if _, err := client.Index("trails").AddDocuments(documents); err != nil {
 		return err
@@ -76,8 +142,13 @@ func IndexTrail(r *models.Record, author *models.Record, client meilisearch.Serv
 	return nil
 }
 
-func UpdateTrail(r *models.Record, author *models.Record, client meilisearch.ServiceManager) error {
-	documents := documentFromTrailRecord(r, author, false)
+func UpdateTrail(app core.App, r *core.Record, author *core.Record, client meilisearch.ServiceManager) error {
+	errs := app.ExpandRecord(r, []string{"tags"}, nil)
+	if len(errs) > 0 {
+		return fmt.Errorf("failed to expand: %v", errs)
+	}
+
+	documents := documentFromTrailRecord(app, r, author, false)
 
 	if _, err := client.Index("trails").UpdateDocuments(documents); err != nil {
 		return err
@@ -99,7 +170,7 @@ func UpdateTrailShares(trailId string, shares []string, client meilisearch.Servi
 	return nil
 }
 
-func IndexList(r *models.Record, client meilisearch.ServiceManager) error {
+func IndexList(r *core.Record, client meilisearch.ServiceManager) error {
 	documents := []map[string]interface{}{documentFromListRecord(r, true)}
 
 	if _, err := client.Index("lists").AddDocuments(documents); err != nil {
@@ -109,7 +180,7 @@ func IndexList(r *models.Record, client meilisearch.ServiceManager) error {
 	return nil
 }
 
-func UpdateList(r *models.Record, client meilisearch.ServiceManager) error {
+func UpdateList(r *core.Record, client meilisearch.ServiceManager) error {
 	documents := documentFromListRecord(r, false)
 
 	if _, err := client.Index("lists").UpdateDocuments(documents); err != nil {

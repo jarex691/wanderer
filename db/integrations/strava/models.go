@@ -35,7 +35,7 @@ type StravaRoute struct {
 	Description         string      `json:"description"`
 	Distance            float32     `json:"distance"`
 	ElevationGain       float32     `json:"elevation_gain"`
-	ID                  int         `json:"id"`
+	ID                  int64       `json:"id"`
 	IDStr               string      `json:"id_str"`
 	Map                 Map         `json:"map"`
 	Name                string      `json:"name"`
@@ -52,7 +52,7 @@ type StravaRoute struct {
 }
 
 type Athlete struct {
-	ID            int       `json:"id"`
+	ID            int64     `json:"id"`
 	ResourceState int       `json:"resource_state"`
 	Firstname     string    `json:"firstname"`
 	Lastname      string    `json:"lastname"`
@@ -75,7 +75,7 @@ type Map struct {
 }
 
 type AthletePrEffort struct {
-	PrActivityID  int       `json:"pr_activity_id"`
+	PrActivityID  int64     `json:"pr_activity_id"`
 	PrElapsedTime int       `json:"pr_elapsed_time"`
 	PrDate        time.Time `json:"pr_date"`
 	EffortCount   int       `json:"effort_count"`
@@ -92,7 +92,7 @@ type AthleteSegmentStats struct {
 }
 
 type Segments struct {
-	ID                  int                 `json:"id"`
+	ID                  int64               `json:"id"`
 	Name                string              `json:"name"`
 	ActivityType        string              `json:"activity_type"`
 	Distance            float32             `json:"distance"`
@@ -117,7 +117,7 @@ type Waypoints struct {
 	Categories        []string  `json:"categories"`
 	Title             string    `json:"title"`
 	Description       string    `json:"description"`
-	DistanceIntoRoute int       `json:"distance_into_route"`
+	DistanceIntoRoute float64   `json:"distance_into_route"`
 }
 
 type StravaActivity struct {
@@ -164,12 +164,12 @@ type StravaActivity struct {
 	DeviceWatts          bool      `json:"device_watts"`
 	HasHeartrate         bool      `json:"has_heartrate"`
 	AverageHeartrate     float64   `json:"average_heartrate"`
-	MaxHeartrate         int       `json:"max_heartrate"`
+	MaxHeartrate         float64   `json:"max_heartrate"`
 	MaxWatts             int       `json:"max_watts"`
 	PrCount              int       `json:"pr_count"`
 	TotalPhotoCount      int       `json:"total_photo_count"`
 	HasKudoed            bool      `json:"has_kudoed"`
-	SufferScore          int       `json:"suffer_score"`
+	SufferScore          float64   `json:"suffer_score"`
 }
 
 type DetailedStravaActivity struct {
@@ -219,7 +219,7 @@ type DetailedStravaActivity struct {
 	TotalPhotoCount          int                   `json:"total_photo_count"`
 	HasKudoed                bool                  `json:"has_kudoed"`
 	WorkoutType              int                   `json:"workout_type"`
-	SufferScore              any                   `json:"suffer_score"`
+	SufferScore              float64               `json:"suffer_score"`
 	Description              string                `json:"description"`
 	Calories                 float64               `json:"calories"`
 	SegmentEfforts           []SegmentEfforts      `json:"segment_efforts"`
@@ -242,7 +242,7 @@ type SegmentActivity struct {
 }
 
 type Segment struct {
-	ID            int       `json:"id"`
+	ID            int64     `json:"id"`
 	ResourceState int       `json:"resource_state"`
 	Name          string    `json:"name"`
 	ActivityType  string    `json:"activity_type"`

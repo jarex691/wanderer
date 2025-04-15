@@ -119,7 +119,7 @@ export default class GPX {
         const pointLength = points.length
         for (let i = 1; i < pointLength; i++) {
           const point = points[i];
-          metrics.addAndFilter(point)         
+          metrics.addAndFilter(point)
 
           totalLat += point.$.lat ?? 0;
           totalLon += point.$.lon ?? 0;
@@ -171,7 +171,7 @@ export default class GPX {
   }
 
   static parse(gpxString: string): Promise<GPX | Error> {
-    const sanitizedGPX = gpxString.replace(/\sxmlns=""/g, '');
+    const sanitizedGPX = gpxString.replace(/\sxmlns=""/g, '').replace(/<!--[\s\S]*?-->/g, '');
 
     return new Promise<GPX | Error>((resolve, reject) => xml2js.parseString(sanitizedGPX, {
       explicitArray: false,

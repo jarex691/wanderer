@@ -9,7 +9,7 @@ export async function GET(event: RequestEvent) {
         const r = await list<Trail>(event, Collection.trails);
 
         for (const t of r.items) {
-            if (!t.author || !pb.authStore.model) {
+            if (!t.author || !pb.authStore.record) {
                 continue;
             }
             if (!t.expand) {
@@ -28,8 +28,16 @@ export async function GET(event: RequestEvent) {
 export async function PUT(event: RequestEvent) {
     try {
         const r = await create<Trail>(event, TrailCreateSchema, Collection.trails)
+        enrichRecord(r);
         return json(r);
     } catch (e) {
         throw handleError(e)
+    }
+}
+
+function enrichRecord(r: Trail) {
+    r.date = r.date?.substring(0, 10) ?? "";
+    for (const log of r.expand?.summit_logs ?? []) {
+        log.date = log.date.substring(0, 10);
     }
 }

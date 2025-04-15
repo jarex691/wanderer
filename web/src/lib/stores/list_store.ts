@@ -1,4 +1,4 @@
-import { List, type ListFilter } from "$lib/models/list";
+import { List, type ListFilter, ExpandType, ExpandTypeToString } from "$lib/models/list";
 import type { Trail } from "$lib/models/trail";
 import { pb } from "$lib/pocketbase";
 import { type ListResult } from "pocketbase";
@@ -11,7 +11,9 @@ let lists: List[] = []
 export const list: Writable<List | null> = writable(null)
 export const listTrail: Writable<Trail | null> = writable(null);
 
-export async function lists_index(filter?: ListFilter, page: number = 1, perPage: number = 5, f: (url: RequestInfo | URL, config?: RequestInit) => Promise<Response> = fetch) {
+export async function lists_index(filter?: ListFilter, page: number = 1, perPage: number = 5, 
+    f: (url: RequestInfo | URL, config?: RequestInit) => Promise<Response> = fetch,
+    e: ExpandType = ExpandType.All) {
     const filterText = filter ? buildFilterText(filter) : ""
 
     const r = await f('/api/v1/list?' + new URLSearchParams({
@@ -19,7 +21,7 @@ export async function lists_index(filter?: ListFilter, page: number = 1, perPage
         perPage: perPage.toString(),
         page: page.toString(),
         filter: filterText,
-        expand: "trails,trails.waypoints,trails.category,list_share_via_list"
+        expand: ExpandTypeToString(e),
     }), {
         method: 'GET',
     })
@@ -92,9 +94,11 @@ export async function lists_search_filter(filter: ListFilter, page: number = 1, 
 
 }
 
-export async function lists_show(id: string, f: (url: RequestInfo | URL, config?: RequestInit) => Promise<Response> = fetch) {
+export async function lists_show(id: string, f: (url: RequestInfo | URL, config?: RequestInit) => Promise<Response> = fetch
+    , e: ExpandType = ExpandType.All) {
+    
     const r = await f(`/api/v1/list/${id}?` + new URLSearchParams({
-        expand: "trails,trails.waypoints,trails.category,list_share_via_list"
+        expand: ExpandTypeToString(e)
     }), {
         method: 'GET',
     })
@@ -121,11 +125,11 @@ export async function lists_show(id: string, f: (url: RequestInfo | URL, config?
 }
 
 export async function lists_create(list: List, avatar?: File) {
-    if (!pb.authStore.model) {
+    if (!pb.authStore.record) {
         throw new Error("Unauthenticated");
     }
 
-    list.author = pb.authStore.model!.id;
+    list.author = pb.authStore.record!.id;
 
     let r = await fetch('/api/v1/list', {
         method: 'PUT',
@@ -241,13 +245,13 @@ function buildFilterText(filter: ListFilter): string {
     if (filter.author?.length) {
         filterText += `&&author="${filter.author}"`
     }
-    if (pb.authStore.model) {
+    if (pb.authStore.record) {
         if (filter.public === false && filter.shared === false) {
-            filterText += `&&author="${pb.authStore.model.id}"`
+            filterText += `&&author="${pb.authStore.record.id}"`
         } else if (filter.public === true && filter.shared === false) {
-            filterText += `&&(public=true||list_share_via_list.user!="${pb.authStore.model.id}"||author="${pb.authStore.model.id}")`
+            filterText += `&&(public=true||list_share_via_list.user!="${pb.authStore.record.id}"||author="${pb.authStore.record.id}")`
         } else if (filter.public === false && filter.shared === true) {
-            filterText += `&&(public=false||list_share_via_list.user="${pb.authStore.model.id}"||author="${pb.authStore.model.id}")`
+            filterText += `&&(public=false||list_share_via_list.user="${pb.authStore.record.id}"||author="${pb.authStore.record.id}")`
         }
     }
     return filterText
@@ -268,17 +272,17 @@ function buildSearchFilterText(filter: ListFilter): string {
         if (filter.public !== undefined) {
             filterText += `(public = ${filter.public}`
 
-            if (!filter.author?.length || filter.author == pb.authStore.model?.id) {
-                filterText += ` OR author = ${pb.authStore.model?.id}`
+            if (!filter.author?.length || filter.author == pb.authStore.record?.id) {
+                filterText += ` OR author = ${pb.authStore.record?.id}`
             }
             filterText += ")"
         }
 
         if (filter.shared !== undefined) {
             if (filter.shared === true) {
-                filterText += ` OR shares = ${pb.authStore.model?.id}`
+                filterText += ` OR shares = ${pb.authStore.record?.id}`
             } else {
-                filterText += ` AND NOT shares = ${pb.authStore.model?.id}`
+                filterText += ` AND NOT shares = ${pb.authStore.record?.id}`
 
             }
         }

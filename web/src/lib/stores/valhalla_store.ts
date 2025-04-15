@@ -2,7 +2,7 @@ import GPX from "$lib/models/gpx/gpx";
 import type Track from "$lib/models/gpx/track";
 import TrackSegment from "$lib/models/gpx/track-segment";
 import Waypoint from "$lib/models/gpx/waypoint";
-import { type ValhallaAnchor, type ValhallaHeightResponse, type ValhallaRouteResponse } from "$lib/models/valhalla";
+import { type RoutingOptions, type ValhallaAnchor, type ValhallaHeightResponse, type ValhallaRouteResponse } from "$lib/models/valhalla";
 import { APIError } from "$lib/util/api_util";
 import { decodePolyline, encodePolyline } from "$lib/util/polyline_util";
 
@@ -20,19 +20,22 @@ export function setRoute(newRoute: GPX) {
     route = newRoute
 }
 
-export async function calculateRouteBetween(startLat: number, startLon: number, endLat: number, endLon: number, costing: string = "pedestrian", autoRoute: boolean = true) {
+export async function calculateRouteBetween(startLat: number, startLon: number, endLat: number, endLon: number, options: RoutingOptions) {
 
     let shape;
-    if (autoRoute) {
+    let duration: number;
+    if (options.autoRouting) {
         let costingBody;
-        switch (costing) {
+        switch (options.modeOfTransport) {
             case "bicycle":
-                costingBody = { "costing": "bicycle", "costing_options": { "bicycle": { "bicycle_type": "Hybrid", "use_roads": 0.5, "use_hills": 0.5, "avoid_bad_surfaces": 0.5, "use_ferry": 0 } } }
+                costingBody = { "costing": options.modeOfTransport, "costing_options": { [options.modeOfTransport]: options.autoOptions } }
                 break;
             case "auto":
-                costingBody = { "costing": "auto", "costing_options": { "auto": { "use_ferry": 0 } } }
-            default:
-                costingBody = { "costing": costing, "costing_options": { costing: { "max_hiking_difficulty": 6, "use_ferry": 0 } } }
+                costingBody = { "costing": options.modeOfTransport, "costing_options": { [options.modeOfTransport]: options.bicycleOptions } }
+                break;
+
+            case "pedestrian":
+                costingBody = { "costing": options.modeOfTransport, "costing_options": { [options.modeOfTransport]: options.pedestrianOptions } }
                 break;
         }
         const requestBody = {
@@ -50,8 +53,10 @@ export async function calculateRouteBetween(startLat: number, startLon: number, 
 
         const routeResponse: ValhallaRouteResponse = await r.json();
         shape = routeResponse.trip.legs[0].shape
+        duration = routeResponse.trip.summary.time
     } else {
         shape = encodePolyline([[startLat, startLon], [endLat, endLon]])
+        duration = 0;
     }
 
     const r2 = await fetch("/api/v1/valhalla/height", { method: "POST", body: JSON.stringify({ encoded_polyline: shape }) })
@@ -63,7 +68,9 @@ export async function calculateRouteBetween(startLat: number, startLon: number, 
 
     const heightResponse: ValhallaHeightResponse = await r2.json()
     const points = decodePolyline(shape);
-    const waypoints = points.map((p, i) => new Waypoint({ $: { lat: p[0], lon: p[1] }, ele: heightResponse.height[i] }))
+    const startTime = new Date().getTime();
+
+    const waypoints = points.map((p, i) => new Waypoint({ $: { lat: p[0], lon: p[1] }, ele: heightResponse.height[i], time: new Date(startTime + (((duration * 1000) / points.length) * i)) }))
 
     return waypoints
 }
@@ -76,6 +83,8 @@ export async function insertIntoRoute(waypoints: Waypoint[], index?: number) {
     } else {
         route.trk?.at(0)?.trkseg?.push(segment);
     }
+
+    route.features = route.getTotals();
 }
 
 export async function editRoute(index: number, waypoints: Waypoint[]) {
@@ -83,8 +92,12 @@ export async function editRoute(index: number, waypoints: Waypoint[]) {
     if (segment) {
         segment.trkpt = waypoints
     }
+    route.features = route.getTotals();
+
 }
 
 export function deleteFromRoute(index: number) {
     route.trk?.at(0)?.trkseg?.splice(index, 1);
+    route.features = route.getTotals();
+
 }

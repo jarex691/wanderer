@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { PUBLIC_VALHALLA_URL } from "$env/static/public";
+    import { env } from "$env/dynamic/public";
     import Button from "$lib/components/base/button.svelte";
     import Datepicker from "$lib/components/base/datepicker.svelte";
     import Select from "$lib/components/base/select.svelte";
@@ -20,7 +20,7 @@
     import type { List } from "$lib/models/list";
     import { SummitLog } from "$lib/models/summit_log";
     import { Trail } from "$lib/models/trail";
-    import type { ValhallaAnchor } from "$lib/models/valhalla";
+    import type { RoutingOptions, ValhallaAnchor } from "$lib/models/valhalla";
     import { Waypoint } from "$lib/models/waypoint";
     import { categories } from "$lib/stores/category_store";
     import {
@@ -45,7 +45,7 @@
         setRoute,
     } from "$lib/stores/valhalla_store";
     import { waypoint } from "$lib/stores/waypoint_store";
-    import { getFileURL } from "$lib/util/file_util";
+    import { getFileURL, readAsDataURLAsync } from "$lib/util/file_util";
     import {
         formatDistance,
         formatElevation,
@@ -53,14 +53,32 @@
     } from "$lib/util/format_util";
     import { fromFile, gpx2trail } from "$lib/util/gpx_util";
 
+    import { page } from "$app/state";
     import emptyStateTrailDark from "$lib/assets/svgs/empty_states/empty_state_trail_dark.svg";
     import emptyStateTrailLight from "$lib/assets/svgs/empty_states/empty_state_trail_light.svg";
+    import Combobox, {
+        type ComboboxItem,
+    } from "$lib/components/base/combobox.svelte";
+    import type { DropdownItem } from "$lib/components/base/dropdown.svelte";
     import Search, {
         type SearchItem,
     } from "$lib/components/base/search.svelte";
+    import RoutingOptionsPopup from "$lib/components/trail/routing_options_popup.svelte";
+    import { TagCreateSchema } from "$lib/models/api/tag_schema.js";
+    import { convertDMSToDD } from "$lib/models/gpx/utils.js";
+    import { Tag } from "$lib/models/tag.js";
+    import {
+        searchLocationReverse,
+        searchLocations,
+    } from "$lib/stores/search_store.js";
+    import { tags_index } from "$lib/stores/tag_store.js";
     import { theme } from "$lib/stores/theme_store.js";
-    import { country_codes } from "$lib/util/country_code_util.js";
-    import { createAnchorMarker } from "$lib/util/maplibre_util";
+    import { getIconForLocation } from "$lib/util/icon_util.js";
+    import {
+        createAnchorMarker,
+        createEditTrailMapPopup,
+    } from "$lib/util/maplibre_util";
+    import EXIF from "$lib/vendor/exif-js/exif.js";
     import { validator } from "@felte/validator-zod";
     import cryptoRandomString from "crypto-random-string";
     import { createForm } from "felte";
@@ -70,17 +88,11 @@
     import { backInOut } from "svelte/easing";
     import { scale } from "svelte/transition";
     import { z } from "zod";
-    import { page } from "$app/state";
-    import type { DropdownItem } from "$lib/components/base/dropdown.svelte";
-    import {
-        searchLocationReverse,
-        searchLocations,
-    } from "$lib/stores/search_store.js";
-    import { getIconForLocation } from "$lib/util/icon_util.js";
 
     let { data } = $props();
 
     let map: M.Map | undefined = $state();
+    let mapPopup: M.Popup | undefined;
     let mapTrail: Trail[] = $state([]);
     let lists = $state(data.lists);
 
@@ -107,25 +119,26 @@
             .object({
                 gpx_data: z.string().optional(),
                 summit_logs: z.array(SummitLogCreateSchema).optional(),
-                waypoints: z.array(
-                    WaypointCreateSchema.extend({
-                        marker: z.any().optional(),
-                    }),
-                ).optional(),
+                waypoints: z
+                    .array(
+                        WaypointCreateSchema.extend({
+                            marker: z.any().optional(),
+                        }),
+                    )
+                    .optional(),
+                tags: z.array(TagCreateSchema).optional(),
             })
             .optional(),
     });
 
-    const modesOfTransport = [
-        { text: $_("hiking"), value: "pedestrian" },
-        { text: $_("cycling"), value: "bicycle" },
-        { text: $_("driving"), value: "auto" },
-    ];
-    let selectedModeOfTransport = $state(modesOfTransport[0].value);
+    let routingOptions: RoutingOptions = $state({
+        autoRouting: true,
+        modeOfTransport: "pedestrian",
+    });
 
-    let autoRouting = $state(true);
+    let savedAtLeastOnce = $state(false);
 
-    let listAddEnabled = $state(false);
+    let tagItems: ComboboxItem[] = $state([]);
 
     const {
         form,
@@ -160,6 +173,17 @@
                     (p) => !p.startsWith("data:image/svg+xml;base64"),
                 );
 
+                if (!form.photos?.length && !photoFiles.length) {
+                    const canvas = document.querySelector(
+                        "#map .maplibregl-canvas",
+                    ) as HTMLCanvasElement;
+
+                    const dataURL = canvas.toDataURL("image/webp", 0.3);
+                    const response = await fetch(dataURL);
+                    const blob = await response.blob();
+                    photoFiles = [new File([blob], "route")];
+                }
+
                 if (form.expand!.gpx_data && overwriteGPX) {
                     gpxFile = new Blob([form.expand!.gpx_data], {
                         type: "text/xml",
@@ -180,13 +204,14 @@
                         ?.trkpt?.at(0)?.$.lon;
                 }
 
-                if (page.params.id === "new") {
+                if (page.params.id === "new" && !savedAtLeastOnce) {
                     const createdTrail = await trails_create(
                         form as Trail,
                         photoFiles,
                         gpxFile,
                     );
-                    form.id = createdTrail.id;
+                    setFields(createdTrail);
+                    trail.set(createdTrail);
                 } else {
                     const updatedTrail = await trails_update(
                         $trail,
@@ -194,10 +219,11 @@
                         photoFiles,
                         gpxFile,
                     );
-                    setFields(updatedTrail)
+                    setFields(updatedTrail);
                 }
+                photoFiles = [];
 
-                listAddEnabled = true;
+                savedAtLeastOnce = true;
                 show_toast({
                     type: "success",
                     icon: "check",
@@ -280,22 +306,22 @@
                 page.data.settings?.privacy?.trails === "public",
             );
 
-            const log = new SummitLog(parseResult.trail.date as string, {
-                distance: $formData.distance,
-                elevation_gain: $formData.elevation_gain,
-                elevation_loss: $formData.elevation_loss,
-                duration: $formData.duration
-                    ? $formData.duration * 60
-                    : undefined,
-            });
+            // const log = new SummitLog(parseResult.trail.date as string, {
+            //     distance: $formData.distance,
+            //     elevation_gain: $formData.elevation_gain,
+            //     elevation_loss: $formData.elevation_loss,
+            //     duration: $formData.duration
+            //         ? $formData.duration * 60
+            //         : undefined,
+            // });
 
-            log.expand!.gpx_data = gpxData;
-            const blob = new Blob([gpxData], { type: selectedFile.type });
-            log._gpx = new File([blob], selectedFile.name, {
-                type: selectedFile.type,
-            });
+            // log.expand!.gpx_data = gpxData;
+            // const blob = new Blob([gpxData], { type: selectedFile.type });
+            // log._gpx = new File([blob], selectedFile.name, {
+            //     type: selectedFile.type,
+            // });
 
-            $formData.expand!.summit_logs?.push(log);
+            // $formData.expand!.summit_logs?.push(log);
 
             if (parseResult.gpx.rte?.length && !parseResult.gpx.trk) {
                 parseResult.gpx.trk = [
@@ -386,33 +412,39 @@
         }
     }
 
-    function beforeWaypointModalOpen() {
+    function beforeWaypointModalOpen(lat?: number, lon?: number) {
         if (!map) {
             return;
         }
         const mapCenter = map.getCenter();
-        waypoint.set(new Waypoint(mapCenter.lat, mapCenter.lng));
+        waypoint.set(new Waypoint(lat ?? mapCenter.lat, lon ?? mapCenter.lng));
         waypointModal.openModal();
     }
 
     function deleteWaypoint(index: number) {
-        $formData.expand!.waypoints?.splice(index, 1);
+        const wp = $formData.expand!.waypoints?.splice(index, 1);
         $formData.waypoints.splice(index, 1);
+
+        if (!$formData.expand!.waypoints?.length) {
+            $formData.expand!.waypoints = [];
+        }
         $formData.expand!.waypoints = $formData.expand!.waypoints;
+
         // updateTrailOnMap();
     }
 
     function saveWaypoint(savedWaypoint: Waypoint) {
-        let editedWaypointIndex = $formData.expand!.waypoints?.findIndex(
-            (s) => s.id == savedWaypoint.id,
-        ) ?? -1;
+        let editedWaypointIndex =
+            $formData.expand!.waypoints?.findIndex(
+                (s) => s.id == savedWaypoint.id,
+            ) ?? -1;
 
         if (editedWaypointIndex >= 0) {
             $formData.expand!.waypoints![editedWaypointIndex] = savedWaypoint;
         } else {
             savedWaypoint.id = cryptoRandomString({ length: 15 });
             $formData.expand!.waypoints = [
-                ...$formData.expand!.waypoints ?? [],
+                ...($formData.expand!.waypoints ?? []),
                 savedWaypoint,
             ];
 
@@ -422,9 +454,8 @@
 
     function moveMarker(marker: M.Marker, wpId?: string) {
         const position = marker.getLngLat();
-        const editableWaypointIndex = $formData.expand!.waypoints?.findIndex(
-            (w) => w.id == wpId,
-        ) ?? -1;
+        const editableWaypointIndex =
+            $formData.expand!.waypoints?.findIndex((w) => w.id == wpId) ?? -1;
         const editableWaypoint =
             $formData.expand!.waypoints![editableWaypointIndex];
         if (!editableWaypoint) {
@@ -432,7 +463,7 @@
         }
         editableWaypoint.lat = position.lat;
         editableWaypoint.lon = position.lng;
-        $formData.expand!.waypoints = [...$formData.expand!.waypoints ?? []];
+        $formData.expand!.waypoints = [...($formData.expand!.waypoints ?? [])];
         // updateTrailOnMap();
     }
 
@@ -445,13 +476,12 @@
         let editedSummitLogIndex = $formData.expand!.summit_logs?.findIndex(
             (s) => s.id == log.id,
         );
-
-        if (editedSummitLogIndex ?? 0 >= 0) {
+        if ((editedSummitLogIndex ?? -1) >= 0) {
             $formData.expand!.summit_logs![editedSummitLogIndex!] = log;
         } else {
             log.id = cryptoRandomString({ length: 15 });
             $formData.expand!.summit_logs = [
-                ...$formData.expand!.summit_logs ?? [],
+                ...($formData.expand!.summit_logs ?? []),
                 log,
             ];
         }
@@ -535,13 +565,27 @@
 
     async function handleMapClick(e: M.MapMouseEvent) {
         if (!drawingActive) {
-            return;
-        }
-        const anchorCount = anchors.length;
-        if (anchorCount == 0) {
-            addAnchor(e.lngLat.lat, e.lngLat.lng, anchors.length);
+            if (
+                (
+                    e.originalEvent.target as HTMLElement
+                ).tagName.toLowerCase() !== "canvas"
+            ) {
+                return;
+            }
+            mapPopup?.remove();
+
+            mapPopup = createEditTrailMapPopup(e.lngLat, () => {
+                mapPopup?.remove();
+                beforeWaypointModalOpen(e.lngLat.lat, e.lngLat.lng);
+            });
+            mapPopup.addTo(map!);
         } else {
-            await addAnchorAndRecalculate(e.lngLat.lat, e.lngLat.lng);
+            const anchorCount = anchors.length;
+            if (anchorCount == 0) {
+                addAnchor(e.lngLat.lat, e.lngLat.lng, anchors.length);
+            } else {
+                await addAnchorAndRecalculate(e.lngLat.lat, e.lngLat.lng);
+            }
         }
     }
 
@@ -555,8 +599,7 @@
                 previousAnchor.lon,
                 lat,
                 lon,
-                selectedModeOfTransport,
-                autoRouting,
+                routingOptions,
             );
             insertIntoRoute(routeWaypoints);
             updateTrailWithRouteData();
@@ -660,7 +703,12 @@
             if (markerIcon) {
                 const markerText = markerIcon.textContent ?? "0";
                 const markerIndex = parseInt(markerText);
-                markerIcon.textContent = markerIndex - 1 + "";
+                const newIndex = markerIndex - 1;
+                markerIcon.textContent = newIndex + "";
+                anchor
+                    .marker!.getPopup()
+                    ._content.getElementsByTagName("h5")[0].textContent =
+                    $_("route-point") + " #" + newIndex;
             }
         }
         if (anchorIndex == 0) {
@@ -695,8 +743,7 @@
                     anchor.lon,
                     nextAnchor.lat,
                     nextAnchor.lon,
-                    selectedModeOfTransport,
-                    autoRouting,
+                    routingOptions,
                 );
             }
             if (anchorIndex > 0) {
@@ -706,8 +753,7 @@
                     previousAnchor.lon,
                     anchor.lat,
                     anchor.lon,
-                    selectedModeOfTransport,
-                    autoRouting,
+                    routingOptions,
                 );
             }
 
@@ -752,7 +798,12 @@
             if (markerIcon) {
                 const markerText = markerIcon.textContent ?? "0";
                 const markerIndex = parseInt(markerText);
-                markerIcon.textContent = markerIndex + 1 + "";
+                const newIndex = markerIndex + 1;
+                markerIcon.textContent = newIndex + "";
+                anchor
+                    .marker!.getPopup()
+                    ._content.getElementsByTagName("h5")[0].textContent =
+                    $_("route-point") + " #" + newIndex;
             }
         }
         const previousAnchor = anchors[data.segment];
@@ -764,16 +815,14 @@
                 previousAnchor.lon,
                 anchor.lat,
                 anchor.lon,
-                selectedModeOfTransport,
-                autoRouting,
+                routingOptions,
             );
             const nextRouteSegment = await calculateRouteBetween(
                 anchor.lat,
                 anchor.lon,
                 nextAnchor.lat,
                 nextAnchor.lon,
-                selectedModeOfTransport,
-                autoRouting,
+                routingOptions,
             );
 
             editRoute(data.segment, previousRouteSegment);
@@ -795,7 +844,7 @@
         overwriteGPX = true;
         const totals = route.features;
         $formData.distance = totals.distance;
-        $formData.duration = totals.duration;
+        $formData.duration = totals.duration / 1000 / 60;
         $formData.elevation_gain = totals.elevationGain;
         $formData.elevation_loss = totals.elevationLoss;
         $formData.expand!.gpx_data = route.toString();
@@ -832,6 +881,73 @@
             untrack(() => updateTrailOnMap());
         }
     });
+
+    function getTrailTags() {
+        return (
+            $formData.expand?.tags?.map((t) => ({
+                text: t.name,
+                value: t,
+            })) ?? []
+        );
+    }
+
+    function setTrailTags(items: ComboboxItem[]) {
+        $formData.expand!.tags = items.map((i) =>
+            i.value ? i.value : new Tag(i.text),
+        );
+    }
+
+    async function searchTags(q: string) {
+        const result = await tags_index(q);
+        tagItems = result.items.map((t) => ({ text: t.name, value: t }));
+    }
+
+    function openPhotoBrowser() {
+        document.getElementById("waypoint-photo-input")!.click();
+    }
+
+    async function handleWaypointPhotoSelection() {
+        const files = (
+            document.getElementById("waypoint-photo-input") as HTMLInputElement
+        ).files;
+
+        if (!files) {
+            return;
+        }
+
+        for (const file of files) {
+            const coords = await new Promise<number[]>((resolve) => {
+                EXIF.getData(file, function (p) {
+                    const lat = EXIF.getTag(p, "GPSLatitude");
+                    const latDir = EXIF.getTag(p, "GPSLatitudeRef");
+                    const lon = EXIF.getTag(p, "GPSLongitude");
+                    const lonDir = EXIF.getTag(p, "GPSLongitudeRef");
+
+                    if (lat && lon) {
+                        resolve([
+                            convertDMSToDD(lat, latDir),
+                            convertDMSToDD(lon, lonDir),
+                        ]);
+                    } else {
+                        resolve([]);
+                    }
+                });
+            });
+            if (coords.length) {
+                const wp: Waypoint = new Waypoint(coords[0], coords[1], {
+                    icon: "image",
+                });
+                wp._photos = [file];
+                saveWaypoint(wp);
+            } else {
+                show_toast({
+                    type: "warning",
+                    icon: "warning",
+                    text: `${file.name}: ${$_("no-gps-data-in-image")}`,
+                }, 10000);
+            }
+        }
+    }
 </script>
 
 <svelte:head>
@@ -865,7 +981,7 @@
                 ? $_("upload-new-file")
                 : $_("upload-file")}</Button
         >
-        {#if PUBLIC_VALHALLA_URL}
+        {#if env.PUBLIC_VALHALLA_URL}
             <div class="flex gap-4 items-center w-full">
                 <hr class="basis-full border-input-border" />
                 <span class="text-gray-500 uppercase">{$_("or")}</span>
@@ -889,7 +1005,7 @@
             type="file"
             name="gpx"
             id="fileInput"
-            accept=".gpx,.GPX,.tcx,.TCX,.kml,.KML,.fit,.FIT"
+            accept=".gpx,.GPX,.tcx,.TCX,.kml,.KML,.kmz,.KMZ,.fit,.FIT"
             style="display: none;"
             onchange={handleFileSelection}
         />
@@ -988,6 +1104,14 @@
         <Datepicker label={$_("date")} bind:value={$formData.date}></Datepicker>
         <Textarea name="description" label={$_("describe-your-trail")}
         ></Textarea>
+        <Combobox
+            bind:value={getTrailTags, setTrailTags}
+            onupdate={searchTags}
+            items={tagItems}
+            label={$_("tags")}
+            multiple
+            chips
+        ></Combobox>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-y-4">
             <Select
                 name="difficulty"
@@ -1008,14 +1132,21 @@
             ></Select>
         </div>
 
-        <Toggle name="public" label={$_("public")}></Toggle>
+        <Toggle
+            name="public"
+            label={$formData.public ? $_("public") : $_("private")}
+            icon={$formData.public ? "globe" : "lock"}
+        ></Toggle>
         <hr class="border-separator" />
         <h3 class="text-xl font-semibold">
             {$_("waypoints", { values: { n: 2 } })}
         </h3>
         <ul>
             {#each $formData.expand?.waypoints ?? [] as waypoint, i}
-                <li onmouseenter={() => openMarkerPopup(waypoint)}>
+                <li
+                    onmouseenter={() => openMarkerPopup(waypoint)}
+                    onmouseleave={() => openMarkerPopup(waypoint)}
+                >
                     <WaypointCard
                         {waypoint}
                         mode="edit"
@@ -1028,9 +1159,23 @@
         <button
             class="btn-secondary"
             type="button"
-            onclick={beforeWaypointModalOpen}
+            onclick={() => beforeWaypointModalOpen()}
             ><i class="fa fa-plus mr-2"></i>{$_("add-waypoint")}</button
         >
+        <button
+            class="btn-secondary"
+            type="button"
+            onclick={() => openPhotoBrowser()}
+            ><i class="fa fa-image mr-2"></i>{$_("from-photos")}</button
+        >
+        <input
+            type="file"
+            id="waypoint-photo-input"
+            accept="image/*"
+            multiple={true}
+            style="display: none;"
+            onchange={() => handleWaypointPhotoSelection()}
+        />
         <hr class="border-separator" />
         <h3 class="text-xl font-semibold">{$_("photos")}</h3>
         <PhotoPicker
@@ -1089,7 +1234,7 @@
             <Button
                 secondary={true}
                 tooltip={$_("save-your-trail-first")}
-                disabled={page.params.id == "new" && !listAddEnabled}
+                disabled={page.params.id == "new" && !savedAtLeastOnce}
                 type="button"
                 onclick={() => listSelectModal.openModal()}
                 ><i class="fa fa-plus mr-2"></i>{$_("add-to-list")}</Button
@@ -1107,17 +1252,12 @@
     <div class="relative">
         {#if drawingActive}
             <div
-                class="absolute top-0 left-16 z-50 p-4 my-2 rounded-xl bg-background space-y-4"
                 in:scale={{ easing: backInOut }}
                 out:scale={{ easing: backInOut }}
+                class="absolute top-0 left-16 z-50"
             >
-                <Toggle bind:value={autoRouting} label="Enable auto-routing"
-                ></Toggle>
-                <Select
-                    items={modesOfTransport}
-                    bind:value={selectedModeOfTransport}
-                    disabled={!autoRouting}
-                ></Select>
+                <RoutingOptionsPopup bind:options={routingOptions}
+                ></RoutingOptionsPopup>
             </div>
         {/if}
         <div id="trail-map">
@@ -1131,6 +1271,7 @@
                 bind:map
                 onclick={(target) => handleMapClick(target)}
                 onsegmentdragend={(data) => handleSegmentDragEnd(data)}
+                mapOptions={{ preserveDrawingBuffer: true }}
             ></MapWithElevationMaplibre>
         </div>
     </div>

@@ -2,21 +2,23 @@ import { TrailRecommendSchema } from '$lib/models/api/trail_schema';
 import type { Trail } from '$lib/models/trail';
 import { pb } from '$lib/pocketbase';
 import { handleError } from '$lib/util/api_util';
-import { error, json, type RequestEvent } from '@sveltejs/kit';
+import { json, type RequestEvent } from '@sveltejs/kit';
 
 export async function GET(event: RequestEvent) {
     try {
         const searchParams = Object.fromEntries(event.url.searchParams);
         const safeSearchParams = TrailRecommendSchema.parse(searchParams);
-
-        const r = await event.fetch(pb.buildUrl("/trail/recommend?" + new URLSearchParams({
+        
+        const r = await pb.send("/trail/recommend?" + new URLSearchParams({
             size: safeSearchParams.size?.toString() ?? ""
-        })));
+        }), {
+            method: "GET",
+        });
 
-        const result: Trail[] = await r.json();
+        const result: Trail[] = r;
 
         for (const t of result) {
-            if (!t.author || !pb.authStore.model) {
+            if (!t.author || !pb.authStore.record) {
                 continue;
             }
             if (!t.expand) {

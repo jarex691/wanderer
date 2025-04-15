@@ -15,6 +15,7 @@ export async function summit_logs_index(author: string, filter?: SummitLogFilter
 
     const r = await f('/api/v1/summit-log?' + new URLSearchParams({
         filter: filterText,
+        perPage: "-1",
         expand: "trails_via_summit_logs.category",
         sort: "+date",
     }), {
@@ -28,17 +29,17 @@ export async function summit_logs_index(author: string, filter?: SummitLogFilter
 
     const fetchedSummitLogs: ListResult<SummitLog> = await r.json();
 
-    for (const log of fetchedSummitLogs.items) {
-        if (!log.gpx) {
-            continue
-        }
-        const gpxData: string = await fetchGPX(log as any, f);
+    // for (const log of fetchedSummitLogs.items) {
+    //     if (!log.gpx) {
+    //         continue
+    //     }
+    //     const gpxData: string = await fetchGPX(log as any, f);
 
-        if (!log.expand) {
-            log.expand = {};
-        }
-        log.expand.gpx_data = gpxData;
-    }
+    //     if (!log.expand) {
+    //         log.expand = {};
+    //     }
+    //     log.expand.gpx_data = gpxData;
+    // }
 
     summitLogs.set(fetchedSummitLogs.items);
 
@@ -46,7 +47,7 @@ export async function summit_logs_index(author: string, filter?: SummitLogFilter
 }
 
 export async function summit_logs_create(summitLog: SummitLog, f: (url: RequestInfo | URL, config?: RequestInit) => Promise<Response> = fetch) {
-    summitLog.author = pb.authStore.model!.id
+    summitLog.author = pb.authStore.record!.id
 
     let r = await f('/api/v1/summit-log', {
         method: 'PUT',
@@ -101,7 +102,7 @@ export async function summit_logs_create(summitLog: SummitLog, f: (url: RequestI
 }
 
 export async function summit_logs_update(oldSummitLog: SummitLog, newSummitLog: SummitLog) {
-    newSummitLog.author = pb.authStore.model!.id
+    newSummitLog.author = pb.authStore.record!.id
 
     let r = await fetch('/api/v1/summit-log/' + newSummitLog.id, {
         method: 'POST',

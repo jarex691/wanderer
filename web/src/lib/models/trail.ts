@@ -1,6 +1,7 @@
 import type { Category } from "./category";
 import type { Comment } from "./comment";
 import type { SummitLog } from "./summit_log";
+import type { Tag } from "./tag";
 import type { TrailShare } from "./trail_share";
 import type { UserAnonymous } from "./user";
 import type { Waypoint } from "./waypoint";
@@ -23,9 +24,12 @@ class Trail {
     gpx?: string;
     created?: string;
     category?: string;
+    tags: string[];
     waypoints: string[];
     summit_logs: string[];
+    polyline?: string;
     expand?: {
+        tags?: Tag[]
         category?: Category;
         waypoints?: Waypoint[]
         summit_logs?: SummitLog[]
@@ -34,7 +38,6 @@ class Trail {
         gpx_data?: string
         trail_share_via_trail?: TrailShare[]
     }
-    tags?: string[];
     description?: string;
     author: string;
 
@@ -81,6 +84,7 @@ class Trail {
         this.photos = params?.photos ?? [];
         this.waypoints = [];
         this.summit_logs = [];
+        this.tags = []
         this.gpx = params?.gpx;
         this.expand = {
             category: params?.category,
@@ -89,7 +93,6 @@ class Trail {
             comments_via_trail: params?.comments ?? [],
             trail_share_via_trail: params?.shares ?? []
         }
-        this.tags = params?.tags ?? []
         this.description = params?.description ?? "";
         this.created = params?.created;
         this.author = "000000000000000"
@@ -99,6 +102,7 @@ class Trail {
 interface TrailFilter {
     q: string,
     category: string[],
+    tags: string[],
     difficulty: ("easy" | "moderate" | "difficult")[]
     author?: string;
     public?: boolean;
@@ -162,13 +166,38 @@ interface TrailSearchResult {
     created: number;
     public: boolean;
     thumbnail: string;
+    polyline?: string;
     shares?: string[];
+    tags?: string[]
     gpx: string;
     _geo: {
         lat: number,
         lng: number
     };
 }
+
+export const defaultTrailSearchAttributes = [
+    "id",
+    "author",
+    "author_name",
+    "author_avatar",
+    "name",
+    "description",
+    "location",
+    "distance",
+    "elevation_gain",
+    "elevation_loss",
+    "duration",
+    "difficulty",
+    "category",
+    "completed",
+    "date",
+    "created",
+    "public",
+    "thumbnail",
+    "gpx",
+    "tags",
+    "_geo",]
 
 
 export { Trail };

@@ -7,7 +7,7 @@
     import type { Trail } from "$lib/models/trail";
     import { pb } from "$lib/pocketbase";
     import { theme } from "$lib/stores/theme_store";
-    import { getFileURL } from "$lib/util/file_util";
+    import { getFileURL, isVideoURL } from "$lib/util/file_util";
     import {
         formatDistance,
         formatElevation,
@@ -16,6 +16,7 @@
     import { _ } from "svelte-i18n";
     import ShareInfo from "../share_info.svelte";
     import type { MouseEventHandler } from "svelte/elements";
+    import Chip from "../base/chip.svelte";
 
     interface Props {
         trail: Trail;
@@ -55,15 +56,32 @@
     <div
         class="relative w-full basis-full max-h-48 overflow-hidden rounded-t-2xl"
     >
-        <img loading="lazy" class="w-full h-full" id="header-img" src={thumbnail} alt="" />
+        {#if isVideoURL(thumbnail)}
+            <!-- svelte-ignore a11y_media_has_caption -->
+            <video
+                id="header-img"
+                class="w-full h-full object-cover"
+                autoplay
+                loop
+                src={thumbnail}
+            ></video>
+        {:else}
+            <img
+                loading="lazy"
+                class="w-full h-full"
+                id="header-img"
+                src={thumbnail}
+                alt=""
+            />
+        {/if}
     </div>
-    {#if (trail.public || trailIsShared) && pb.authStore.model}
+    {#if (trail.public || trailIsShared) && pb.authStore.record}
         <div
             class="flex absolute top-4 right-4 {trail.public && trailIsShared
                 ? 'w-14'
                 : 'w-8'} h-8 rounded-full items-center justify-center bg-background text-content"
         >
-            {#if trail.public && pb.authStore.model}
+            {#if trail.public && pb.authStore.record}
                 <span
                     class="tooltip"
                     class:mr-2={trail.public && trailIsShared}
@@ -106,6 +124,13 @@
                     />
                     {trail.expand.author.username}
                 </p>
+            {/if}
+            {#if trail.tags?.length}
+                <div class="flex flex-wrap gap-1 mb-3">
+                    {#each trail.tags ?? [] as t}
+                        <Chip text={t} closable={false} primary={false}></Chip>
+                    {/each}
+                </div>
             {/if}
             <div class="flex gap-x-4">
                 {#if trail.location}

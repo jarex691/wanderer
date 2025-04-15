@@ -5,6 +5,7 @@
     import TrailList from "$lib/components/trail/trail_list.svelte";
     import type { Trail, TrailFilter } from "$lib/models/trail";
     import { trails_search_filter } from "$lib/stores/trail_store";
+    import type { Snapshot } from "@sveltejs/kit";
     import { onMount } from "svelte";
     import { _ } from "svelte-i18n";
 
@@ -14,10 +15,20 @@
 
     let filter: TrailFilter = $state(page.data.filter);
     const pagination: { page: number; totalPages: number } = $state({
-        page: 1,
+        page: page.url.searchParams.has("page")
+            ? parseInt(page.url.searchParams.get("page")!)
+            : 1,
         totalPages: 1,
     });
     let trails: Trail[] = $state([]);
+
+    export const snapshot: Snapshot<TrailFilter> = {
+        capture: () => filter,
+        restore: (value) => {
+            filter = value;
+            handleFilterUpdate()
+        },
+    };
 
     onMount(() => {
         if (window.innerWidth < 768) {

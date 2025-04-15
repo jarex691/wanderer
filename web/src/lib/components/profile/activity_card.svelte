@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Activity } from "$lib/models/activity";
     import type { UserAnonymous } from "$lib/models/user";
-    import { getFileURL } from "$lib/util/file_util";
+    import { getFileURL, isVideoURL } from "$lib/util/file_util";
     import {
         formatDistance,
         formatElevation,
@@ -76,16 +76,35 @@
                 ? 'grid-cols-[8fr_5fr]'
                 : 'grid-cols-1'}"
         >
-            {#each activity.photos as photo, i}
-                <img
-                    class="object-cover h-full max-h-80 w-full"
-                    class:row-span-2={i == 0 && activity.photos.length > 2}
-                    src={getFileURL(
-                        { collectionId: activity.type + "s", id: activity.id },
-                        photo,
-                    )}
-                    alt=""
-                />
+            {#each activity.photos.slice(0,3) as photo, i}
+                {#if isVideoURL(photo)}
+                    <!-- svelte-ignore a11y_media_has_caption -->
+                    <video
+                        class="object-cover h-full max-h-80 w-full"
+                        autoplay
+                        loop
+                        src={getFileURL(
+                            {
+                                collectionId: activity.type + "s",
+                                id: activity.id,
+                            },
+                            photo,
+                        )}
+                    ></video>
+                {:else}
+                    <img
+                        class="object-cover h-full max-h-80 w-full"
+                        class:row-span-2={i == 0 && activity.photos.length > 2}
+                        src={getFileURL(
+                            {
+                                collectionId: activity.type + "s",
+                                id: activity.id,
+                            },
+                            photo,
+                        )}
+                        alt=""
+                    />
+                {/if}
             {/each}
         </div>
     {/if}

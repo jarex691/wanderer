@@ -62,10 +62,10 @@
               ]
             : []),
         { text: $_("print"), value: "print", icon: "print" },
-        ...(trail.author != pb.authStore.model?.id
+        ...(trail.author != pb.authStore.record?.id
             ? []
             : [{ text: $_("add-to-list"), value: "list", icon: "bookmark" }]),
-        ...(trail.author != pb.authStore.model?.id
+        ...(trail.author != pb.authStore.record?.id
             ? []
             : [{ text: $_("share"), value: "share", icon: "share" }]),
         ...(allowEdit
@@ -121,12 +121,20 @@
             let fileData: string = await trail2gpx(trail);
             if (exportSettings.fileFormat == "json") {
                 fileData = JSON.stringify(
-                    gpx(new DOMParser().parseFromString(fileData, "text/xml")),
+                    gpx(
+                        new DOMParser().parseFromString(
+                            fileData,
+                            "application/gpx+xml" as any,
+                        ),
+                    ),
                 );
             }
             if (!exportSettings.photos && !exportSettings.summitLog) {
                 const blob = new Blob([fileData], {
-                    type: "text/plain",
+                    type:
+                        exportSettings.fileFormat == "json"
+                            ? "application/json"
+                            : "application/gpx+xml",
                 });
                 saveAs(blob, `${trail.name}.${exportSettings.fileFormat}`);
             } else {
@@ -209,7 +217,7 @@
     >{#snippet children({ toggleMenu: openDropdown })}
         <button
             aria-label="Open dropdown"
-            class="rounded-full bg-white text-black hover:bg-gray-200 focus:ring-4 ring-gray-100/50 transition-colors h-12 w-12"
+            class=" btn-primary !rounded-full h-12 w-12"
             onclick={openDropdown}
         >
             <i class="fa fa-ellipsis-vertical"></i>

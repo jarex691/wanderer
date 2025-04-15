@@ -1,12 +1,10 @@
 package util
 
 import (
-	"fmt"
 	"net/mail"
 
 	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase"
-	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/mailer"
 )
 
@@ -33,8 +31,8 @@ type NotificationSettings struct {
 	Email bool `json:"email"`
 }
 
-func getNotificationPermissions(app *pocketbase.PocketBase, user string, notificationType NotificationType) (*NotificationSettings, error) {
-	settings, err := app.Dao().FindFirstRecordByFilter("settings", "user={:user}", dbx.Params{"user": user})
+func getNotificationPermissions(app core.App, user string, notificationType NotificationType) (*NotificationSettings, error) {
+	settings, err := app.FindFirstRecordByFilter("settings", "user={:user}", dbx.Params{"user": user})
 	if err != nil {
 		return nil, err
 	}
@@ -47,13 +45,16 @@ func getNotificationPermissions(app *pocketbase.PocketBase, user string, notific
 
 	settingsForType, exists := notificationPreferences[notificationType]
 	if !exists {
-		return nil, fmt.Errorf("notification type '%s' not found", notificationType)
+		return &NotificationSettings{
+			Web:   true,
+			Email: true,
+		}, nil
 	}
 
 	return &settingsForType, nil
 }
 
-func SendNotification(app *pocketbase.PocketBase, notification Notification, recipient string) error {
+func SendNotification(app core.App, notification Notification, recipient string) error {
 	if notification.Author == recipient {
 		return nil
 	}
@@ -62,34 +63,34 @@ func SendNotification(app *pocketbase.PocketBase, notification Notification, rec
 		return err
 	}
 
-	notifications, err := app.Dao().FindCollectionByNameOrId("notifications")
+	notifications, err := app.FindCollectionByNameOrId("notifications")
 	if err != nil {
 		return err
 	}
 
 	if permissions.Web {
-		n := models.NewRecord(notifications)
+		n := core.NewRecord(notifications)
 		n.Set("type", string(notification.Type))
 		n.Set("metadata", notification.Metadata)
 		n.Set("seen", notification.Seen)
 		n.Set("recipient", recipient)
 		n.Set("author", notification.Author)
 
-		if err := app.Dao().SaveRecord(n); err != nil {
+		if err := app.Save(n); err != nil {
 			return err
 		}
 	}
 
 	if permissions.Email {
-		recipientUser, err := app.Dao().FindRecordById("users", recipient)
+		recipientUser, err := app.FindRecordById("users", recipient)
 		if err != nil {
 			return err
 		}
-		authorUser, err := app.Dao().FindRecordById("users", notification.Author)
+		authorUser, err := app.FindRecordById("users", notification.Author)
 		if err != nil {
 			return err
 		}
-		html, err := GenerateHTML(app.Settings().Meta.AppUrl, recipientUser.Username(), authorUser.Username(), notification.Type, notification.Metadata)
+		html, err := GenerateHTML(app.Settings().Meta.AppURL, recipientUser.GetString("username"), authorUser.GetString("username"), notification.Type, notification.Metadata)
 		if err != nil {
 			return err
 		}
@@ -109,8 +110,8 @@ func SendNotification(app *pocketbase.PocketBase, notification Notification, rec
 	return nil
 }
 
-func SendNotificationToFollowers(app *pocketbase.PocketBase, notification Notification) error {
-	followers, err := app.Dao().FindRecordsByFilter("follows", "followee={:user}", "", -1, 0, dbx.Params{"user": notification.Author})
+func SendNotificationToFollowers(app core.App, notification Notification) error {
+	followers, err := app.FindRecordsByFilter("follows", "followee={:user}", "", -1, 0, dbx.Params{"user": notification.Author})
 
 	if err != nil {
 		return err
