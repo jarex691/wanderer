@@ -107,6 +107,7 @@ interface TrailFilter {
     author?: string;
     public?: boolean;
     shared?: boolean;
+    private?: boolean;
     near: {
         lat?: number,
         lon?: number,
@@ -197,6 +198,7 @@ export const defaultTrailSearchAttributes = [
     "thumbnail",
     "gpx",
     "tags",
+    "shares",
     "_geo",]
 
 
